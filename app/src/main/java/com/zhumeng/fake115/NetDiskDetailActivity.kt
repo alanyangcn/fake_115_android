@@ -32,9 +32,9 @@ import androidx.core.view.WindowCompat
 import com.zhumeng.fake115.ui.theme.AppTheme
 import com.zhumeng.fake115.ui.theme.Fake115Theme
 
-private const val DETAIL_TITLE_FALLBACK = "\u8be6\u60c5"
-private const val DETAIL_BACK = "\u8fd4\u56de"
-private const val DETAIL_TODO = "\u8be6\u60c5\u9875\u6682\u672a\u5b9e\u73b0"
+private const val DETAIL_TITLE_FALLBACK = "详情"
+private const val DETAIL_BACK = "返回"
+private const val DETAIL_TODO = "详情页暂未实现"
 
 class NetDiskDetailActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {

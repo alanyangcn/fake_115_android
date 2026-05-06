@@ -8,6 +8,9 @@ import com.zhumeng.fake115.data.model.NetDiskPathNode
 import com.zhumeng.fake115.data.model.NetDiskQuery
 import com.zhumeng.fake115.data.model.NetDiskResponse
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -17,8 +20,8 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 
-private const val NET_DISK_LOAD_ERROR = "\u52a0\u8f7d\u7f51\u76d8\u6587\u4ef6\u5931\u8d25\u3002"
-private const val DEFAULT_FOLDER_NAME = "\u76ee\u5f55"
+private const val NET_DISK_LOAD_ERROR = "加载网盘文件失败。"
+private const val DEFAULT_FOLDER_NAME = "目录"
 
 class NetDiskRepository(
     private val context: Context,
@@ -60,6 +63,7 @@ class NetDiskRepository(
             throw IllegalStateException(json.optString("error").ifBlank { NET_DISK_LOAD_ERROR })
         }
 
+        starredFileEventsInternal.tryEmit(StarredFileEvent(fileId = fileId, isStarred = star))
         star
     }
 
@@ -73,10 +77,10 @@ class NetDiskRepository(
         )
 
         if (!json.optBoolean("state", false)) {
-            throw IllegalStateException(json.optString("error").ifBlank { "\u5220\u9664\u5931\u8d25\u3002" })
+            throw IllegalStateException(json.optString("error").ifBlank { "删除失败。" })
         }
 
-        return@withContext "\u5220\u9664\u6210\u529f"
+        return@withContext "删除成功"
     }
 
     private fun buildUri(base: String, params: Map<String, String>): Uri {
@@ -162,6 +166,7 @@ class NetDiskRepository(
                         size = row.optLong("s"),
                         updateTime = updateTime,
                         uploadTime = uploadTime,
+                        durationSeconds = row.optLong("play_long").takeIf { it > 0L },
                         fileType = row.optMeaningfulString("class") ?: suffix,
                         suffix = suffix,
                         isStarred = row.optLong("star_time") > 0L || row.optInt("m") == 1,
@@ -195,8 +200,22 @@ class NetDiskRepository(
     companion object {
         private const val TAG = "NetDiskRepository"
         private const val LOG_PREVIEW_LENGTH = 4000
+        private val starredFileEventsInternal = MutableSharedFlow<StarredFileEvent>(extraBufferCapacity = 16)
+        private val deletedFileEventsInternal = MutableSharedFlow<String>(extraBufferCapacity = 16)
+
+        val starredFileEvents: SharedFlow<StarredFileEvent> = starredFileEventsInternal.asSharedFlow()
+        val deletedFileEvents: SharedFlow<String> = deletedFileEventsInternal.asSharedFlow()
+
+        fun notifyFileDeleted(fileId: String) {
+            deletedFileEventsInternal.tryEmit(fileId)
+        }
     }
 }
+
+data class StarredFileEvent(
+    val fileId: String,
+    val isStarred: Boolean,
+)
 
 private fun JSONObject.optMeaningfulString(key: String): String? {
     val value = opt(key)?.toString()?.trim().orEmpty()

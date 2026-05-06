@@ -10,6 +10,7 @@ data class NetDiskFile(
     val size: Long,
     val updateTime: Long?,
     val uploadTime: Long?,
+    val durationSeconds: Long?,
     val fileType: String?,
     val suffix: String?,
     val isStarred: Boolean,

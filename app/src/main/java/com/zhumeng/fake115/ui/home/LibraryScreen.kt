@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.FilterAlt
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Schedule
@@ -52,7 +53,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -83,13 +83,14 @@ import com.zhumeng.fake115.data.model.FavoriteFilterMode
 import com.zhumeng.fake115.data.model.LibraryMovie
 import com.zhumeng.fake115.data.model.SortOption
 import com.zhumeng.fake115.data.model.ViewMode
+import com.zhumeng.fake115.ui.common.DeleteConfirmDialog
 import com.zhumeng.fake115.ui.theme.AppTheme
 import java.time.LocalDate
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterialApi::class)
 @Composable
 fun LibraryScreen(
-    onOpenPlayer: (LibraryMovie) -> Unit,
+    onOpenPlayer: (LibraryMovie, List<LibraryMovie>) -> Unit,
     onOpenDetail: (LibraryMovie) -> Unit,
     contentPadding: PaddingValues = PaddingValues(0.dp),
     viewModel: LibraryViewModel = viewModel(),
@@ -107,6 +108,8 @@ fun LibraryScreen(
     val monthOptions = remember { (1..12).map { it.toString().padStart(2, '0') } }
     var filterDialogVisible by remember { mutableStateOf(false) }
     var pendingDeleteMovie by remember { mutableStateOf<LibraryMovie?>(null) }
+    val hasActressFilter = state.selectedActress != null
+    val listTopPadding = contentPadding.calculateTopPadding() + if (hasActressFilter) 104.dp else 58.dp
 
     LaunchedEffect(viewModel, context) {
         viewModel.toastMessages.collect { message ->
@@ -149,23 +152,12 @@ fun LibraryScreen(
             contentPadding = PaddingValues(
                 start = 12.dp,
                 end = 12.dp,
-                top = contentPadding.calculateTopPadding() + 8.dp,
+                top = listTopPadding,
                 bottom = contentPadding.calculateBottomPadding() + 12.dp,
             ),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                LibraryToolbar(
-                    state = state,
-                    onToggleFavoriteFilter = viewModel::cycleFavoriteFilter,
-                    onToggleViewMode = viewModel::toggleViewMode,
-                    onToggleOrder = viewModel::toggleSortOrder,
-                    onSortSelected = viewModel::setSortOption,
-                    onOpenFilters = { filterDialogVisible = true },
-                )
-            }
-
             when {
                 state.isLoading && state.movies.isEmpty() -> {
                     items(8) { LoadingCard() }
@@ -183,7 +175,7 @@ fun LibraryScreen(
                             movie = movie,
                             viewMode = state.viewMode,
                             onOpenDetail = { onOpenDetail(movie) },
-                            onPlay = { onOpenPlayer(movie) },
+                            onPlay = { onOpenPlayer(movie, state.movies) },
                             onFavorite = { viewModel.toggleFavorite(movie.id) },
                             onDelete = { pendingDeleteMovie = movie },
                             favoriteEnabled = movie.id !in state.favoriteUpdatingIds,
@@ -207,10 +199,57 @@ fun LibraryScreen(
             }
         }
 
+        LibraryToolbar(
+            state = state,
+            onToggleFavoriteFilter = viewModel::cycleFavoriteFilter,
+            onToggleViewMode = viewModel::toggleViewMode,
+            onToggleOrder = viewModel::toggleSortOrder,
+            onSortSelected = viewModel::setSortOption,
+            onCyclePageSize = viewModel::cyclePageSize,
+            onOpenFilters = { filterDialogVisible = true },
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .background(colors.topBar)
+                .padding(
+                    start = 12.dp,
+                    end = 12.dp,
+                    top = contentPadding.calculateTopPadding() + 8.dp,
+                    bottom = 8.dp,
+                ),
+        )
+
         PullRefreshIndicator(
             refreshing = state.isRefreshing,
             state = pullRefreshState,
-            modifier = Modifier.align(Alignment.TopCenter),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = listTopPadding),
+        )
+
+        state.selectedActress?.let { actress ->
+            ActressFilterChip(
+                actress = actress,
+                onClear = viewModel::clearActressFilter,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .padding(
+                        start = 12.dp,
+                        end = 12.dp,
+                        top = contentPadding.calculateTopPadding() + 62.dp,
+                    ),
+            )
+        }
+
+        MovieTotalBadge(
+            total = state.total,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(
+                    end = 14.dp,
+                    bottom = contentPadding.calculateBottomPadding() + 18.dp,
+                ),
         )
 
         if (filterDialogVisible) {
@@ -228,7 +267,7 @@ fun LibraryScreen(
 
         pendingDeleteMovie?.let { movie ->
             DeleteConfirmDialog(
-                movie = movie,
+                message = "确定要删除 ${movie.fanhao.ifBlank { movie.name }} 吗？",
                 deleting = movie.id in state.deletingIds,
                 onDismiss = {
                     if (movie.id !in state.deletingIds) pendingDeleteMovie = null
@@ -242,19 +281,89 @@ fun LibraryScreen(
 }
 
 @Composable
+private fun MovieTotalBadge(
+    total: Int,
+    modifier: Modifier = Modifier,
+) {
+    val colors = AppTheme.colors
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+        color = colors.surfaceOverlay,
+    ) {
+        Text(
+            text = "共 $total 部影片",
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            color = colors.textPrimary,
+            style = MaterialTheme.typography.labelSmall,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Normal,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun ActressFilterChip(
+    actress: String,
+    onClear: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = AppTheme.colors
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        color = colors.surfaceOverlay,
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 12.dp, end = 6.dp, top = 7.dp, bottom = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = actress,
+                modifier = Modifier.weight(1f),
+                color = colors.textPrimary,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Surface(
+                modifier = Modifier.size(22.dp),
+                shape = RoundedCornerShape(8.dp),
+                color = colors.surfaceVariant,
+                onClick = onClear,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "清空演员筛选",
+                        modifier = Modifier.size(14.dp),
+                        tint = colors.textPrimary,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun LibraryToolbar(
     state: LibraryUiState,
     onToggleFavoriteFilter: () -> Unit,
     onToggleViewMode: () -> Unit,
     onToggleOrder: () -> Unit,
     onSortSelected: (SortOption) -> Unit,
+    onCyclePageSize: () -> Unit,
     onOpenFilters: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val colors = AppTheme.colors
     var sortMenuExpanded by remember { mutableStateOf(false) }
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         ToolbarActionButton(
@@ -310,6 +419,12 @@ private fun LibraryToolbar(
             }
         }
 
+        ToolbarTextButton(
+            modifier = Modifier.weight(1f),
+            text = state.limit.toString(),
+            onClick = onCyclePageSize,
+        )
+
         ToolbarActionButton(
             modifier = Modifier.weight(1f),
             icon = Icons.Rounded.SwapVert,
@@ -333,7 +448,8 @@ private fun LibraryToolbar(
             containerColor = if (
                 state.selectedGenres.isNotEmpty() ||
                 state.selectedYear != null ||
-                state.selectedMonth != null
+                state.selectedMonth != null ||
+                state.selectedActress != null
             ) {
                 colors.accentSoft
             } else {
@@ -373,6 +489,32 @@ private fun ToolbarActionButton(
     }
 }
 
+@Composable
+private fun ToolbarTextButton(
+    modifier: Modifier = Modifier,
+    text: String,
+    onClick: () -> Unit,
+) {
+    val colors = AppTheme.colors
+    FilledTonalButton(
+        onClick = onClick,
+        modifier = modifier.height(42.dp),
+        shape = RoundedCornerShape(12.dp),
+        contentPadding = PaddingValues(0.dp),
+        colors = ButtonDefaults.filledTonalButtonColors(
+            containerColor = colors.surfaceVariant,
+            contentColor = colors.textPrimary,
+        ),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FilterDialog(
@@ -388,7 +530,8 @@ private fun FilterDialog(
     val colors = AppTheme.colors
     val selectedFilterCount = state.selectedGenres.size +
         (if (state.selectedYear != null) 1 else 0) +
-        (if (state.selectedMonth != null) 1 else 0)
+        (if (state.selectedMonth != null) 1 else 0) +
+        (if (state.selectedActress != null) 1 else 0)
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -401,7 +544,7 @@ private fun FilterDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .background(colors.surfaceOverlay)
-                .padding(16.dp),
+                .padding(10.dp),
             contentAlignment = Alignment.Center,
         ) {
             Card(
@@ -412,8 +555,8 @@ private fun FilterDialog(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -447,7 +590,7 @@ private fun FilterDialog(
                             .fillMaxWidth()
                             .heightIn(max = 420.dp)
                             .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         FilterSection(
                             title = "年份",
@@ -502,12 +645,15 @@ private fun FilterSection(
 ) {
     val colors = AppTheme.colors
     Card(
+        modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = colors.surface),
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
                 text = title,
@@ -517,8 +663,9 @@ private fun FilterSection(
             )
 
             FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 options.forEach { option ->
                     Surface(
@@ -763,40 +910,6 @@ private fun EmptyState(errorMessage: String?) {
             )
         }
     }
-}
-
-@Composable
-private fun DeleteConfirmDialog(
-    movie: LibraryMovie,
-    deleting: Boolean,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Text(text = "确认删除")
-        },
-        text = {
-            Text(text = "确定要删除 ${movie.fanhao.ifBlank { movie.name }} 吗？")
-        },
-        confirmButton = {
-            Button(
-                onClick = onConfirm,
-                enabled = !deleting,
-            ) {
-                Text(if (deleting) "删除中..." else "确认删除")
-            }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismiss,
-                enabled = !deleting,
-            ) {
-                Text("取消")
-            }
-        },
-    )
 }
 
 private suspend fun LazyGridState.loadMoreWhenNeeded(

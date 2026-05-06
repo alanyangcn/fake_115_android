@@ -52,9 +52,9 @@ class SettingsViewModel(
                 cookieInput = cookie,
                 hasSavedCookie = cookie.isNotBlank(),
                 message = if (cookie.isBlank()) {
-                    "Cookie \u5df2\u6e05\u7a7a\u3002"
+                    "Cookie 已清空。"
                 } else {
-                    "Cookie \u5df2\u4fdd\u5b58\u5230\u672c\u5730\u3002"
+                    "Cookie 已保存到本地。"
                 },
             )
         }
@@ -72,7 +72,7 @@ class SettingsViewModel(
                         it.copy(
                             cookieInput = cookie,
                             isFetching = false,
-                            message = "\u5df2\u6210\u529f\u83b7\u53d6 Cookie\uff0c\u8bf7\u70b9\u51fb\u4fdd\u5b58\u3002",
+                            message = "已成功获取 Cookie，请点击保存。",
                         )
                     }
                 }
@@ -80,7 +80,7 @@ class SettingsViewModel(
                     _uiState.update {
                         it.copy(
                             isFetching = false,
-                            message = error.message ?: "\u83b7\u53d6 Cookie \u5931\u8d25\u3002",
+                            message = error.message ?: "获取 Cookie 失败。",
                         )
                     }
                 }
@@ -104,22 +104,22 @@ class SettingsViewModel(
             }.orEmpty()
 
             if (code !in 200..299) {
-                throw IllegalStateException(body.ifBlank { "\u8bf7\u6c42\u5931\u8d25\uff0cHTTP $code\u3002" })
+                throw IllegalStateException(body.ifBlank { "请求失败，HTTP $code。" })
             }
 
             val json = JSONObject(body)
             if (!json.optBoolean("success")) {
                 throw IllegalStateException(
-                    json.optString("message").ifBlank { "\u83b7\u53d6 Cookie \u5931\u8d25\u3002" }
+                    json.optString("message").ifBlank { "获取 Cookie 失败。" }
                 )
             }
             if (!json.optBoolean("configured")) {
-                throw IllegalStateException("\u670d\u52a1\u7aef\u8fd8\u6ca1\u6709\u914d\u7f6e Cookie\u3002")
+                throw IllegalStateException("服务端还没有配置 Cookie。")
             }
 
             json.optString("cookie")
                 .trim()
-                .ifBlank { throw IllegalStateException("\u8fd4\u56de\u7684 Cookie \u4e3a\u7a7a\u3002") }
+                .ifBlank { throw IllegalStateException("返回的 Cookie 为空。") }
         } finally {
             connection.disconnect()
         }

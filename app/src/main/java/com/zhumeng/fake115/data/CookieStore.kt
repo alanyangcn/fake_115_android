@@ -24,7 +24,7 @@ object CookieStore {
 
     fun requireCookie(context: Context): String {
         return getCookie(context).ifBlank {
-            throw IllegalStateException("\u672a\u914d\u7f6e 115 Cookie\uff0c\u8bf7\u5148\u5728\u8bbe\u7f6e\u9875\u4fdd\u5b58\u3002")
+            throw IllegalStateException("未配置 115 Cookie，请先在设置页保存。")
         }
     }
 }

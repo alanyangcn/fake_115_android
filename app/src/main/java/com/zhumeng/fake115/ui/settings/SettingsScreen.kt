@@ -64,7 +64,7 @@ fun SettingsScreen(
                     fontWeight = FontWeight.Black
                 )
                 Text(
-                    text = "\u53ef\u4ee5\u624b\u52a8\u8f93\u5165 Cookie\uff0c\u4e5f\u53ef\u4ee5\u4ece\u670d\u52a1\u7aef\u83b7\u53d6\u540e\u518d\u4fdd\u5b58\u5230\u672c\u5730\u3002",
+                    text = "可以手动输入 Cookie，也可以从服务端获取后再保存到本地。",
                     color = colors.textTertiary
                 )
                 OutlinedTextField(
@@ -88,21 +88,21 @@ fun SettingsScreen(
                         enabled = !uiState.isFetching,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text(if (uiState.isFetching) "\u83b7\u53d6\u4e2d..." else "\u83b7\u53d6")
+                        Text(if (uiState.isFetching) "获取中..." else "获取")
                     }
                     Button(
                         onClick = viewModel::saveCookie,
                         enabled = !uiState.isFetching,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("\u4fdd\u5b58")
+                        Text("保存")
                     }
                 }
                 Text(
                     text = if (uiState.hasSavedCookie) {
-                        "\u5f53\u524d\u5df2\u4fdd\u5b58\u672c\u5730 Cookie\u3002"
+                        "当前已保存本地 Cookie。"
                     } else {
-                        "\u5f53\u524d\u8fd8\u672a\u4fdd\u5b58\u672c\u5730 Cookie\u3002"
+                        "当前还未保存本地 Cookie。"
                     },
                     color = colors.textTertiary,
                 )

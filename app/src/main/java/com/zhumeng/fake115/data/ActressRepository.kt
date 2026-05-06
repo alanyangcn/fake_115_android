@@ -5,12 +5,14 @@ import android.util.Log
 import com.zhumeng.fake115.data.model.Actress
 import com.zhumeng.fake115.data.model.ActressQuery
 import com.zhumeng.fake115.data.model.ActressResponse
+import com.zhumeng.fake115.data.model.ActressVideosFavoriteResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import androidx.core.net.toUri
@@ -30,22 +32,72 @@ class ActressRepository(
         )
     }
 
+    suspend fun updateFavorite(actressId: Int, favorite: Boolean): Boolean = withContext(Dispatchers.IO) {
+        val uri = buildUri("$baseUrl/api/actresses/$actressId/favorite", emptyMap())
+        val json = requestJson(
+            uri = uri,
+            method = "POST",
+            body = JSONObject().put("favorite", favorite).toString(),
+        )
+        json.optBoolean("favorite", favorite)
+    }
+
+    suspend fun updateVideosFavorite(actressId: Int, favorite: Boolean): ActressVideosFavoriteResult =
+        withContext(Dispatchers.IO) {
+            val uri = buildUri("$baseUrl/api/actresses/$actressId/favorite-videos", emptyMap())
+            val json = requestJson(
+                uri = uri,
+                method = "POST",
+                body = JSONObject().put("favorite", favorite).toString(),
+            )
+            ActressVideosFavoriteResult(
+                favorite = json.optBoolean("favorite", favorite),
+                count = json.optInt("count", 0),
+                deletedMissingCount = json.optInt("deletedMissingCount", 0),
+            )
+        }
+
     private fun buildUri(base: String, params: Map<String, String>): Uri {
         val builder = base.toUri().buildUpon()
         params.forEach { (key, value) -> builder.appendQueryParameter(key, value) }
         return builder.build()
     }
 
-    private fun requestJson(uri: Uri): JSONObject {
+    private fun requestJson(
+        uri: Uri,
+        method: String = "GET",
+        body: String? = null,
+    ): JSONObject {
         val connection = (URL(uri.toString()).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
+            requestMethod = method
             connectTimeout = 15_000
             readTimeout = 15_000
             setRequestProperty("Accept", "application/json")
+            if (body != null) {
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
         }
 
         return try {
-            Log.d(TAG, "Request: GET ${uri}")
+            Log.d(
+                TAG,
+                buildString {
+                    append("Request: ")
+                    append(method)
+                    append(' ')
+                    append(uri)
+                    if (body != null) {
+                        append(" body=")
+                        append(body.take(LOG_PREVIEW_LENGTH))
+                    }
+                }
+            )
+            if (body != null) {
+                OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
+                    writer.write(body)
+                }
+            }
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val body = stream?.use { input ->
@@ -75,6 +127,9 @@ class ActressRepository(
                         name = row.optString("name"),
                         avatar = row.optString("avatar").takeIf { it.isNotBlank() && it != "null" },
                         videoCount = row.optInt("videoCount"),
+                        isFavorite = row.optInt("isFavorite"),
+                        favoriteAt = row.optLong("favoriteAt").takeIf { it > 0L },
+                        isFavoriteAllVideos = row.optInt("isFavoriteAllVideos"),
                     )
                 )
             }

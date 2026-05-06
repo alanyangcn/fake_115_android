@@ -32,7 +32,6 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -66,6 +65,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.zhumeng.fake115.data.LibraryRepository
 import com.zhumeng.fake115.data.model.VideoDetail
+import com.zhumeng.fake115.ui.common.DeleteConfirmDialog
 import com.zhumeng.fake115.ui.player.EmbeddedVideoPlayer
 import com.zhumeng.fake115.ui.player.rememberManagedExoPlayer
 import com.zhumeng.fake115.ui.theme.AppTheme
@@ -418,44 +418,29 @@ fun VideoDetailScreen(
                     }
 
                     if (showDeleteDialog) {
-                        AlertDialog(
-                            onDismissRequest = {
+                        DeleteConfirmDialog(
+                            message = "确定要删除 ${video.fanhao.ifBlank { video.name }} 吗？",
+                            deleting = isDeleting,
+                            onDismiss = {
                                 if (!isDeleting) showDeleteDialog = false
                             },
-                            title = { Text("确认删除") },
-                            text = { Text("确定要删除 ${video.fanhao.ifBlank { video.name }} 吗？") },
-                            confirmButton = {
-                                Button(
-                                    onClick = {
-                                        scope.launch {
-                                            isDeleting = true
-                                            runCatching { repository.deleteMovie(video.id) }
-                                                .onSuccess { message ->
-                                                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                                                    showDeleteDialog = false
-                                                    onBack()
-                                                }
-                                                .onFailure { error ->
-                                                    Toast.makeText(
-                                                        context,
-                                                        error.message ?: "删除失败",
-                                                        Toast.LENGTH_SHORT,
-                                                    ).show()
-                                                }
-                                            isDeleting = false
+                            onConfirm = {
+                                scope.launch {
+                                    isDeleting = true
+                                    runCatching { repository.deleteMovie(video.id) }
+                                        .onSuccess { message ->
+                                            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                            showDeleteDialog = false
+                                            onBack()
                                         }
-                                    },
-                                    enabled = !isDeleting,
-                                ) {
-                                    Text(if (isDeleting) "删除中..." else "确认删除")
-                                }
-                            },
-                            dismissButton = {
-                                TextButton(
-                                    onClick = { showDeleteDialog = false },
-                                    enabled = !isDeleting,
-                                ) {
-                                    Text("取消")
+                                        .onFailure { error ->
+                                            Toast.makeText(
+                                                context,
+                                                error.message ?: "删除失败",
+                                                Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    isDeleting = false
                                 }
                             },
                         )

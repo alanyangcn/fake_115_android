@@ -2,14 +2,19 @@ package com.zhumeng.fake115
 
 import android.os.Bundle
 import android.view.WindowManager
+import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,6 +26,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Home
@@ -29,7 +35,7 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -37,12 +43,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
@@ -59,13 +69,13 @@ import com.zhumeng.fake115.ui.settings.SettingsViewModel
 import com.zhumeng.fake115.ui.theme.AppTheme
 import com.zhumeng.fake115.ui.theme.Fake115Theme
 
-private const val TAB_HOME = "\u9996\u9875"
-private const val TAB_ACTRESS = "\u6f14\u5458"
-private const val TAB_NET_DISK = "\u7f51\u76d8"
-private const val TAB_SETTINGS = "\u8bbe\u7f6e"
-private const val PLACEHOLDER_MOVIE = "\u641c\u7d22\u6807\u9898\u6216\u756a\u53f7"
-private const val PLACEHOLDER_ACTRESS = "\u641c\u7d22\u6f14\u5458"
-private const val LABEL_SEARCH = "\u641c\u7d22"
+private const val TAB_HOME = "首页"
+private const val TAB_ACTRESS = "演员"
+private const val TAB_NET_DISK = "网盘"
+private const val TAB_SETTINGS = "设置"
+private const val PLACEHOLDER_MOVIE = "搜索标题或番号"
+private const val PLACEHOLDER_ACTRESS = "搜索演员"
+private const val LABEL_SEARCH = "搜索"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -76,7 +86,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             Fake115Theme {
                 MainScreen(
-                    onOpenPlayer = { movie ->
+                    onOpenPlayer = { movie, playlist ->
                         startActivity(
                             PlayerActivity.createIntent(
                                 context = this,
@@ -88,6 +98,7 @@ class MainActivity : ComponentActivity() {
                                 deleteLabel = movie.fanhao.ifBlank { movie.name },
                                 pc = movie.pc,
                                 isFavorite = movie.isFavorite == 1,
+                                playlist = playlist,
                             )
                         )
                     },
@@ -112,19 +123,33 @@ private enum class MainTab {
     Settings,
 }
 
+private const val MAIN_PREFS_NAME = "main_prefs"
+private const val KEY_SELECTED_TAB = "selected_tab"
+
 @Composable
 private fun MainScreen(
-    onOpenPlayer: (LibraryMovie) -> Unit,
+    onOpenPlayer: (LibraryMovie, List<LibraryMovie>) -> Unit,
     onOpenDetail: (LibraryMovie) -> Unit,
 ) {
     val colors = AppTheme.colors
-    var selectedTab by rememberSaveable { mutableStateOf(MainTab.NetDisk) }
+    val context = LocalContext.current
+    val mainPrefs = remember(context) {
+        context.getSharedPreferences(MAIN_PREFS_NAME, Context.MODE_PRIVATE)
+    }
+    var selectedTab by rememberSaveable {
+        mutableStateOf(
+            MainTab.entries.firstOrNull {
+                it.name == mainPrefs.getString(KEY_SELECTED_TAB, MainTab.NetDisk.name)
+            } ?: MainTab.NetDisk
+        )
+    }
     val libraryViewModel: LibraryViewModel = viewModel()
     val actressViewModel: ActressViewModel = viewModel()
     val netDiskViewModel: NetDiskViewModel = viewModel()
     val settingsViewModel: SettingsViewModel = viewModel()
     val uiState by libraryViewModel.uiState.collectAsState()
     val actressState by actressViewModel.uiState.collectAsState()
+    val actressGridState = rememberLazyStaggeredGridState()
 
     Scaffold(
         containerColor = colors.appBackground,
@@ -145,34 +170,56 @@ private fun MainScreen(
             }
         },
         bottomBar = {
+            val selectedTabColor = Color(0xFF4FB7FF)
+            val unselectedTabColor = Color(0xFF8C96A8)
             NavigationBar(
-                modifier = Modifier.height(88.dp),
+                modifier = Modifier.height(80.dp),
                 containerColor = colors.topBar,
-                contentColor = colors.textPrimary,
+                contentColor = selectedTabColor,
             ) {
-                NavigationBarItem(
+                MainNavigationItem(
                     selected = selectedTab == MainTab.Home,
-                    onClick = { selectedTab = MainTab.Home },
-                    icon = { Icon(Icons.Rounded.Home, contentDescription = TAB_HOME) },
-                    label = { Text(TAB_HOME) },
+                    onClick = {
+                        selectedTab = MainTab.Home
+                        mainPrefs.edit().putString(KEY_SELECTED_TAB, MainTab.Home.name).apply()
+                    },
+                    icon = Icons.Rounded.Home,
+                    label = TAB_HOME,
+                    selectedColor = selectedTabColor,
+                    unselectedColor = unselectedTabColor,
                 )
-                NavigationBarItem(
+                MainNavigationItem(
                     selected = selectedTab == MainTab.Actress,
-                    onClick = { selectedTab = MainTab.Actress },
-                    icon = { Icon(Icons.Rounded.Person, contentDescription = TAB_ACTRESS) },
-                    label = { Text(TAB_ACTRESS) },
+                    onClick = {
+                        selectedTab = MainTab.Actress
+                        mainPrefs.edit().putString(KEY_SELECTED_TAB, MainTab.Actress.name).apply()
+                    },
+                    icon = Icons.Rounded.Person,
+                    label = TAB_ACTRESS,
+                    selectedColor = selectedTabColor,
+                    unselectedColor = unselectedTabColor,
                 )
-                NavigationBarItem(
+                MainNavigationItem(
                     selected = selectedTab == MainTab.NetDisk,
-                    onClick = { selectedTab = MainTab.NetDisk },
-                    icon = { Icon(Icons.Rounded.Folder, contentDescription = TAB_NET_DISK) },
-                    label = { Text(TAB_NET_DISK) },
+                    onClick = {
+                        selectedTab = MainTab.NetDisk
+                        mainPrefs.edit().putString(KEY_SELECTED_TAB, MainTab.NetDisk.name).apply()
+                    },
+                    icon = Icons.Rounded.Folder,
+                    label = TAB_NET_DISK,
+                    selectedColor = selectedTabColor,
+                    unselectedColor = unselectedTabColor,
                 )
-                NavigationBarItem(
+                MainNavigationItem(
                     selected = selectedTab == MainTab.Settings,
-                    onClick = { selectedTab = MainTab.Settings },
-                    icon = { Icon(Icons.Rounded.Settings, contentDescription = TAB_SETTINGS) },
-                    label = { Text(TAB_SETTINGS) },
+                    onClick = {
+                        selectedTab = MainTab.Settings
+                        mainPrefs.edit().putString(KEY_SELECTED_TAB, MainTab.Settings.name).apply()
+                    },
+                    icon = Icons.Rounded.Settings,
+                    label = TAB_SETTINGS,
+                    selectedColor = selectedTabColor,
+                    unselectedColor = unselectedTabColor,
                 )
             }
         },
@@ -191,6 +238,12 @@ private fun MainScreen(
             MainTab.Actress -> ActressScreen(
                 contentPadding = screenPadding,
                 viewModel = actressViewModel,
+                gridState = actressGridState,
+                onActressSelected = { actress ->
+                    libraryViewModel.filterByActress(actress.name)
+                    selectedTab = MainTab.Home
+                    mainPrefs.edit().putString(KEY_SELECTED_TAB, MainTab.Home.name).apply()
+                },
             )
             MainTab.NetDisk -> NetDiskScreen(
                 contentPadding = screenPadding,
@@ -201,6 +254,43 @@ private fun MainScreen(
                 viewModel = settingsViewModel,
             )
         }
+    }
+}
+
+@Composable
+private fun RowScope.MainNavigationItem(
+    selected: Boolean,
+    onClick: () -> Unit,
+    icon: ImageVector,
+    label: String,
+    selectedColor: Color,
+    unselectedColor: Color,
+) {
+    val tint = if (selected) selectedColor else unselectedColor
+    Column(
+        modifier = Modifier
+            .weight(1f)
+            .fillMaxSize()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = tint,
+            modifier = Modifier.size(22.dp),
+        )
+        Text(
+            text = label,
+            color = tint,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 

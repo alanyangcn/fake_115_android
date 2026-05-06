@@ -7,11 +7,18 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.WindowCompat
 import com.zhumeng.fake115.data.LibraryRepository
 import com.zhumeng.fake115.data.NetDiskRepository
+import com.zhumeng.fake115.data.model.LibraryMovie
+import com.zhumeng.fake115.data.model.NetDiskFile
+import com.zhumeng.fake115.ui.player.PlayerPlaylistItem
 import com.zhumeng.fake115.ui.player.VideoPlayerScreen
 import com.zhumeng.fake115.ui.theme.Fake115Theme
 
@@ -23,41 +30,102 @@ class PlayerActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         applyImmersivePlayerMode()
 
-        val videoId = intent.getIntExtra(EXTRA_VIDEO_ID, 0)
-        val itemId = intent.getStringExtra(EXTRA_ITEM_ID).orEmpty().ifBlank {
-            videoId.takeIf { it > 0 }?.toString().orEmpty()
+        val fallbackVideoId = intent.getIntExtra(EXTRA_VIDEO_ID, 0)
+        val fallbackItemId = intent.getStringExtra(EXTRA_ITEM_ID).orEmpty().ifBlank {
+            fallbackVideoId.takeIf { it > 0 }?.toString().orEmpty()
         }
-        val title = intent.getStringExtra(EXTRA_TITLE).orEmpty()
-        val deleteLabel = intent.getStringExtra(EXTRA_DELETE_LABEL).orEmpty()
-        val pc = intent.getStringExtra(EXTRA_PC).orEmpty()
-        val initialFavorite = intent.getBooleanExtra(EXTRA_IS_FAVORITE, false)
+        val fallbackTitle = intent.getStringExtra(EXTRA_TITLE).orEmpty()
+        val fallbackDeleteLabel = intent.getStringExtra(EXTRA_DELETE_LABEL).orEmpty()
+        val fallbackPc = intent.getStringExtra(EXTRA_PC).orEmpty()
+        val fallbackFavorite = intent.getBooleanExtra(EXTRA_IS_FAVORITE, false)
         val useNetDiskActions = intent.getBooleanExtra(EXTRA_USE_NET_DISK_ACTIONS, false)
+        val initialPlaylist = readPlaylist(intent).ifEmpty {
+            listOf(
+                PlayerPlaylistItem(
+                    itemId = fallbackItemId,
+                    title = fallbackTitle,
+                    deleteLabel = fallbackDeleteLabel,
+                    pc = fallbackPc,
+                    isFavorite = fallbackFavorite,
+                )
+            )
+        }
+        val initialIndex = initialPlaylist.indexOfFirst { it.itemId == fallbackItemId }
+            .takeIf { it >= 0 } ?: 0
         val libraryRepository = LibraryRepository(applicationContext)
         val netDiskRepository = NetDiskRepository(applicationContext)
 
         setContent {
             Fake115Theme {
-                VideoPlayerScreen(
-                    itemId = itemId,
-                    title = title,
-                    deleteLabel = deleteLabel,
-                    initialUrl = "",
-                    pc = pc,
-                    initialFavorite = initialFavorite,
-                    requestHeaders = libraryRepository.build115RequestHeaders(),
-                    resolveUrl = libraryRepository::resolve115PlayableUrl,
-                    updateFavorite = if (useNetDiskActions) {
-                        { id, favorite -> netDiskRepository.updateStar(id, favorite) }
+                var playlist by remember { mutableStateOf(initialPlaylist) }
+                var currentIndex by remember { mutableStateOf(initialIndex.coerceIn(0, playlist.lastIndex)) }
+                val currentItem = playlist.getOrNull(currentIndex)
+
+                if (currentItem == null) {
+                    finish()
                     } else {
-                        { id, favorite -> libraryRepository.updateFavorite(id.toInt(), favorite) }
-                    },
-                    deleteVideo = if (useNetDiskActions) {
-                        netDiskRepository::deleteFile
-                    } else {
-                        { id -> libraryRepository.deleteMovie(id.toInt()) }
-                    },
-                    onBack = ::finish
-                )
+                    VideoPlayerScreen(
+                        itemId = currentItem.itemId,
+                        title = currentItem.title,
+                        deleteLabel = currentItem.deleteLabel,
+                        initialUrl = "",
+                        pc = currentItem.pc,
+                        initialFavorite = currentItem.isFavorite,
+                        playlist = if (playlist.size <= 1) emptyList() else playlist,
+                        currentPlaylistIndex = currentIndex,
+                        onPlaylistItemSelected = { index ->
+                            if (index in playlist.indices) {
+                                currentIndex = index
+                            }
+                        },
+                        onPlaybackEnded = {
+                            if (currentIndex < playlist.lastIndex) {
+                                currentIndex += 1
+                            }
+                        },
+                        requestHeaders = libraryRepository.build115RequestHeaders(),
+                        resolveUrl = libraryRepository::resolve115PlayableUrl,
+                        updateFavorite = if (useNetDiskActions) {
+                            { id, favorite ->
+                                val updated = netDiskRepository.updateStar(id, favorite)
+                                playlist = playlist.map { item ->
+                                    if (item.itemId == id) item.copy(isFavorite = updated) else item
+                                }
+                                updated
+                            }
+                        } else {
+                            { id, favorite ->
+                                val updated = libraryRepository.updateFavorite(id.toInt(), favorite)
+                                playlist = playlist.map { item ->
+                                    if (item.itemId == id) item.copy(isFavorite = updated) else item
+                                }
+                                updated
+                            }
+                        },
+                        deleteVideo = if (useNetDiskActions) {
+                            { id ->
+                                val message = netDiskRepository.deleteFile(id)
+                                NetDiskRepository.notifyFileDeleted(id)
+                                message
+                            }
+                        } else {
+                            { id -> libraryRepository.deleteMovie(id.toInt()) }
+                        },
+                        onDeleteCompleted = {
+                            if (playlist.size <= 1) {
+                                finish()
+                            } else {
+                                val removedIndex = currentIndex
+                                val nextPlaylist = playlist.toMutableList().apply {
+                                    removeAt(removedIndex)
+                                }
+                                playlist = nextPlaylist
+                                currentIndex = removedIndex.coerceAtMost(nextPlaylist.lastIndex)
+                            }
+                        },
+                        onBack = ::finish
+                    )
+                }
             }
         }
     }
@@ -81,6 +149,26 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
+    private fun readPlaylist(intent: Intent): List<PlayerPlaylistItem> {
+        val ids = intent.getStringArrayListExtra(EXTRA_PLAYLIST_IDS).orEmpty()
+        val titles = intent.getStringArrayListExtra(EXTRA_PLAYLIST_TITLES).orEmpty()
+        val deleteLabels = intent.getStringArrayListExtra(EXTRA_PLAYLIST_DELETE_LABELS).orEmpty()
+        val pcs = intent.getStringArrayListExtra(EXTRA_PLAYLIST_PCS).orEmpty()
+        val favorites = intent.getBooleanArrayExtra(EXTRA_PLAYLIST_FAVORITES) ?: BooleanArray(0)
+
+        return ids.mapIndexedNotNull { index, id ->
+            val pc = pcs.getOrNull(index).orEmpty()
+            if (id.isBlank() || pc.isBlank()) return@mapIndexedNotNull null
+            PlayerPlaylistItem(
+                itemId = id,
+                title = titles.getOrNull(index).orEmpty(),
+                deleteLabel = deleteLabels.getOrNull(index).orEmpty(),
+                pc = pc,
+                isFavorite = favorites.getOrNull(index) ?: false,
+            )
+        }
+    }
+
     companion object {
         private const val EXTRA_VIDEO_ID = "extra_video_id"
         private const val EXTRA_TITLE = "extra_title"
@@ -89,6 +177,11 @@ class PlayerActivity : ComponentActivity() {
         private const val EXTRA_IS_FAVORITE = "extra_is_favorite"
         private const val EXTRA_ITEM_ID = "extra_item_id"
         private const val EXTRA_USE_NET_DISK_ACTIONS = "extra_use_net_disk_actions"
+        private const val EXTRA_PLAYLIST_IDS = "extra_playlist_ids"
+        private const val EXTRA_PLAYLIST_TITLES = "extra_playlist_titles"
+        private const val EXTRA_PLAYLIST_DELETE_LABELS = "extra_playlist_delete_labels"
+        private const val EXTRA_PLAYLIST_PCS = "extra_playlist_pcs"
+        private const val EXTRA_PLAYLIST_FAVORITES = "extra_playlist_favorites"
 
         fun createIntent(
             context: Context,
@@ -97,6 +190,7 @@ class PlayerActivity : ComponentActivity() {
             deleteLabel: String,
             pc: String,
             isFavorite: Boolean,
+            playlist: List<LibraryMovie> = emptyList(),
         ): Intent {
             return Intent(context, PlayerActivity::class.java).apply {
                 putExtra(EXTRA_VIDEO_ID, videoId)
@@ -105,6 +199,27 @@ class PlayerActivity : ComponentActivity() {
                 putExtra(EXTRA_DELETE_LABEL, deleteLabel)
                 putExtra(EXTRA_PC, pc)
                 putExtra(EXTRA_IS_FAVORITE, isFavorite)
+                putStringArrayListExtra(
+                    EXTRA_PLAYLIST_IDS,
+                    ArrayList(playlist.map { it.id.toString() }),
+                )
+                putStringArrayListExtra(
+                    EXTRA_PLAYLIST_TITLES,
+                    ArrayList(
+                        playlist.map { movie ->
+                            listOf(movie.fanhao, movie.name)
+                                .filter { it.isNotBlank() }
+                                .joinToString(" ")
+                                .ifBlank { movie.fanhao.ifBlank { movie.name } }
+                        }
+                    ),
+                )
+                putStringArrayListExtra(
+                    EXTRA_PLAYLIST_DELETE_LABELS,
+                    ArrayList(playlist.map { it.fanhao.ifBlank { it.name } }),
+                )
+                putStringArrayListExtra(EXTRA_PLAYLIST_PCS, ArrayList(playlist.map { it.pc }))
+                putExtra(EXTRA_PLAYLIST_FAVORITES, playlist.map { it.isFavorite == 1 }.toBooleanArray())
             }
         }
 
@@ -115,6 +230,7 @@ class PlayerActivity : ComponentActivity() {
             deleteLabel: String,
             pc: String,
             isFavorite: Boolean,
+            playlist: List<NetDiskFile> = emptyList(),
         ): Intent {
             return Intent(context, PlayerActivity::class.java).apply {
                 putExtra(EXTRA_ITEM_ID, fileId)
@@ -123,6 +239,23 @@ class PlayerActivity : ComponentActivity() {
                 putExtra(EXTRA_PC, pc)
                 putExtra(EXTRA_IS_FAVORITE, isFavorite)
                 putExtra(EXTRA_USE_NET_DISK_ACTIONS, true)
+                putStringArrayListExtra(
+                    EXTRA_PLAYLIST_IDS,
+                    ArrayList(playlist.map { it.id }),
+                )
+                putStringArrayListExtra(
+                    EXTRA_PLAYLIST_TITLES,
+                    ArrayList(playlist.map { it.n }),
+                )
+                putStringArrayListExtra(
+                    EXTRA_PLAYLIST_DELETE_LABELS,
+                    ArrayList(playlist.map { it.n }),
+                )
+                putStringArrayListExtra(
+                    EXTRA_PLAYLIST_PCS,
+                    ArrayList(playlist.map { it.pc.orEmpty() }),
+                )
+                putExtra(EXTRA_PLAYLIST_FAVORITES, playlist.map { it.isStarred }.toBooleanArray())
             }
         }
     }

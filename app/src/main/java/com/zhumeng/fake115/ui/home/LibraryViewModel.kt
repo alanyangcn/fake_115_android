@@ -34,7 +34,7 @@ data class LibraryUiState(
     val genres: List<GenreOption> = emptyList(),
     val total: Int = 0,
     val page: Int = 1,
-    val limit: Int = 24,
+    val limit: Int = 30,
     val searchInput: String = "",
     val sortOption: SortOption = SortOption.ReleaseDate,
     val sortOrder: String = "desc",
@@ -43,6 +43,7 @@ data class LibraryUiState(
     val selectedYear: String? = null,
     val selectedMonth: String? = null,
     val selectedGenres: Set<String> = emptySet(),
+    val selectedActress: String? = null,
 ) {
     val hasMore: Boolean
         get() = movies.size < total
@@ -53,6 +54,8 @@ private data class SavedLibraryState(
     val sortOrder: String,
     val favoriteFilter: FavoriteFilterMode,
     val viewMode: ViewMode,
+    val limit: Int,
+    val selectedActress: String?,
 )
 
 class LibraryViewModel(
@@ -85,6 +88,14 @@ class LibraryViewModel(
 
     fun setSortOption(option: SortOption) {
         _uiState.update { it.copy(sortOption = option) }
+        persistCurrentControls()
+        loadLibrary(page = 1, isRefreshing = false, append = false)
+    }
+
+    fun cyclePageSize() {
+        _uiState.update {
+            it.copy(limit = nextPageSize(it.limit))
+        }
         persistCurrentControls()
         loadLibrary(page = 1, isRefreshing = false, append = false)
     }
@@ -142,12 +153,37 @@ class LibraryViewModel(
         loadLibrary(page = 1, isRefreshing = false, append = false)
     }
 
+    fun filterByActress(name: String) {
+        val actress = name.trim()
+        if (actress.isBlank()) return
+
+        searchJob?.cancel()
+        _uiState.update {
+            it.copy(
+                searchInput = "",
+                selectedYear = null,
+                selectedMonth = null,
+                selectedGenres = emptySet(),
+                selectedActress = actress,
+            )
+        }
+        persistCurrentControls()
+        loadLibrary(page = 1, isRefreshing = false, append = false)
+    }
+
+    fun clearActressFilter() {
+        _uiState.update { it.copy(selectedActress = null) }
+        persistCurrentControls()
+        loadLibrary(page = 1, isRefreshing = false, append = false)
+    }
+
     fun clearFilters() {
         _uiState.update {
             it.copy(
                 selectedYear = null,
                 selectedMonth = null,
                 selectedGenres = emptySet(),
+                selectedActress = null,
                 favoriteFilter = FavoriteFilterMode.All,
             )
         }
@@ -286,6 +322,7 @@ class LibraryViewModel(
                         year = current.selectedYear,
                         month = current.selectedMonth,
                         genres = current.selectedGenres.takeIf { it.isNotEmpty() }?.joinToString(","),
+                        actress = current.selectedActress,
                     )
                 )
             }.onSuccess { response ->
@@ -325,6 +362,10 @@ class LibraryViewModel(
             viewMode = ViewMode.entries.firstOrNull {
                 it.name == prefs.getString(KEY_VIEW_MODE, ViewMode.Normal.name)
             } ?: ViewMode.Normal,
+            limit = prefs.getInt(KEY_PAGE_SIZE, DEFAULT_PAGE_SIZE).takeIf {
+                it in PAGE_SIZE_OPTIONS
+            } ?: DEFAULT_PAGE_SIZE,
+            selectedActress = prefs.getString(KEY_SELECTED_ACTRESS, null)?.takeIf { it.isNotBlank() },
         )
     }
 
@@ -335,6 +376,8 @@ class LibraryViewModel(
             .putString(KEY_SORT_ORDER, current.sortOrder)
             .putString(KEY_FAVORITE_FILTER, current.favoriteFilter.name)
             .putString(KEY_VIEW_MODE, current.viewMode.name)
+            .putInt(KEY_PAGE_SIZE, current.limit)
+            .putString(KEY_SELECTED_ACTRESS, current.selectedActress.orEmpty())
             .apply()
     }
 
@@ -344,6 +387,8 @@ class LibraryViewModel(
             sortOrder = saved.sortOrder,
             favoriteFilter = saved.favoriteFilter,
             viewMode = saved.viewMode,
+            limit = saved.limit,
+            selectedActress = saved.selectedActress,
         )
     }
 
@@ -353,7 +398,17 @@ class LibraryViewModel(
         private const val KEY_SORT_ORDER = "sort_order"
         private const val KEY_FAVORITE_FILTER = "favorite_filter"
         private const val KEY_VIEW_MODE = "view_mode"
+        private const val KEY_PAGE_SIZE = "page_size"
+        private const val KEY_SELECTED_ACTRESS = "selected_actress"
+        private const val DEFAULT_PAGE_SIZE = 30
+        private val PAGE_SIZE_OPTIONS = listOf(30, 60, 120)
     }
+}
+
+private fun nextPageSize(current: Int): Int {
+    val options = listOf(30, 60, 120)
+    val index = options.indexOf(current)
+    return if (index == -1 || index == options.lastIndex) options.first() else options[index + 1]
 }
 
 private fun FavoriteFilterMode.toQueryValue(): String? {

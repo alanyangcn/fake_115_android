@@ -9,17 +9,23 @@ import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.media.AudioManager
 import android.os.BatteryManager
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -30,14 +36,13 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CropFree
 import androidx.compose.material.icons.rounded.Delete
@@ -46,12 +51,16 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.FitScreen
 import androidx.compose.material.icons.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.rounded.LightMode
+import androidx.compose.material.icons.rounded.List
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.ScreenRotationAlt
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -61,7 +70,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -75,6 +85,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -93,7 +104,10 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
@@ -102,6 +116,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.zhumeng.fake115.ui.common.DeleteConfirmDialog
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
@@ -109,6 +124,14 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+data class PlayerPlaylistItem(
+    val itemId: String,
+    val title: String,
+    val deleteLabel: String,
+    val pc: String,
+    val isFavorite: Boolean,
+)
 
 @Composable
 fun VideoPlayerScreen(
@@ -122,13 +145,17 @@ fun VideoPlayerScreen(
     resolveUrl: (suspend (String) -> String)? = null,
     updateFavorite: (suspend (String, Boolean) -> Boolean)? = null,
     deleteVideo: (suspend (String) -> String)? = null,
+    playlist: List<PlayerPlaylistItem> = emptyList(),
+    currentPlaylistIndex: Int = -1,
+    onPlaylistItemSelected: (Int) -> Unit = {},
+    onPlaybackEnded: () -> Unit = {},
     onBack: () -> Unit,
+    onDeleteCompleted: () -> Unit = onBack,
 ) {
-    val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    var isFullScreen by rememberSaveable { mutableStateOf(false) }
-    var resolvedUrl by rememberSaveable { mutableStateOf(initialUrl) }
-    var isResolving by rememberSaveable { mutableStateOf(initialUrl.isBlank() && pc.isNotBlank()) }
-    var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    var resolvedUrl by rememberSaveable(itemId, pc) { mutableStateOf(initialUrl) }
+    var isResolving by rememberSaveable(itemId, pc) { mutableStateOf(initialUrl.isBlank() && pc.isNotBlank()) }
+    var errorMessage by rememberSaveable(itemId, pc) { mutableStateOf<String?>(null) }
     var isFavorite by rememberSaveable(itemId) { mutableStateOf(initialFavorite) }
     var isFavoriteUpdating by remember { mutableStateOf(false) }
     var isDeleting by remember { mutableStateOf(false) }
@@ -137,8 +164,31 @@ fun VideoPlayerScreen(
         url = resolvedUrl,
         requestHeaders = requestHeaders,
     )
+    val activity = context.findActivity()
 
-    LaunchedEffect(initialUrl, pc) {
+    LaunchedEffect(itemId) {
+        isDeleting = false
+        isFavoriteUpdating = false
+        errorMessage = null
+    }
+
+    DisposableEffect(activity) {
+        val window = activity?.window
+        if (window != null) {
+            val controller = WindowInsetsControllerCompat(window, window.decorView)
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.navigationBars())
+        }
+        onDispose {
+            if (window != null) {
+                WindowInsetsControllerCompat(window, window.decorView)
+                    .show(WindowInsetsCompat.Type.navigationBars())
+            }
+        }
+    }
+
+    LaunchedEffect(itemId, initialUrl, pc) {
         if (initialUrl.isNotBlank()) {
             resolvedUrl = initialUrl
             isResolving = false
@@ -183,7 +233,8 @@ fun VideoPlayerScreen(
                 isDeleting = true
                 runCatching { deleteVideo(itemId) }
                     .onSuccess {
-                        onBack()
+                        isDeleting = false
+                        onDeleteCompleted()
                     }
                     .onFailure { error ->
                         errorMessage = error.message ?: "Failed to delete video."
@@ -195,141 +246,78 @@ fun VideoPlayerScreen(
 
     Surface(
         modifier = Modifier.fillMaxSize(),
-        color = Color(0xFF050914)
+        color = Color.Black
     ) {
-        if (isLandscape) {
-            when {
-                isResolving -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        CircularProgressIndicator()
-                    }
+        when {
+            isResolving -> {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
                 }
+            }
 
-                errorMessage != null -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
+            errorMessage != null -> {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Text(
-                            text = errorMessage ?: "Playback failed.",
-                            color = Color.White,
-                        )
-                    }
-                }
-
-                else -> {
-                    exoPlayer?.let {
-                        EmbeddedVideoPlayer(
-                            exoPlayer = it,
-                            modifier = Modifier.fillMaxSize(),
-                            isFullScreen = true,
-                            onToggleFullScreen = {},
-                            isFavorite = isFavorite,
-                            favoriteEnabled = !isFavoriteUpdating && updateFavorite != null && itemId.isNotBlank(),
-                            deleteEnabled = !isDeleting && deleteVideo != null && itemId.isNotBlank(),
-                            deleteInProgress = isDeleting,
-                            onToggleFavorite = handleToggleFavorite,
-                            onDelete = handleDelete,
-                            deleteLabel = deleteLabel,
-                            title = title.ifBlank { "Video" },
-                            onBack = onBack,
-                            showTopChrome = true,
-                            showFullScreenButton = false,
-                            forceFullScreen = true,
-                        )
+                        Text(text = errorMessage ?: "Playback failed.", color = Color.White)
+                        Button(
+                            onClick = {
+                                if (pc.isBlank() || resolveUrl == null) return@Button
+                                scope.launch {
+                                    isResolving = true
+                                    errorMessage = null
+                                    runCatching { resolveUrl(pc) }
+                                        .onSuccess { url ->
+                                            resolvedUrl = url
+                                            isResolving = false
+                                        }
+                                        .onFailure { error ->
+                                            resolvedUrl = ""
+                                            isResolving = false
+                                            errorMessage = error.message ?: "Failed to resolve playback url."
+                                        }
+                                }
+                            }
+                        ) {
+                            Text("Retry")
+                        }
                     }
                 }
             }
-            return@Surface
-        }
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.navigationBars)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            when {
-                isResolving -> {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(24.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            CircularProgressIndicator()
-                            Text("Resolving playback url...")
-                        }
-                    }
-                }
-
-                errorMessage != null -> {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(24.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(24.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Text(text = errorMessage ?: "Playback failed.", color = Color.White)
-                            Button(
-                                onClick = {
-                                    if (pc.isBlank() || resolveUrl == null) return@Button
-                                    scope.launch {
-                                        isResolving = true
-                                        errorMessage = null
-                                        runCatching { resolveUrl(pc) }
-                                            .onSuccess { url ->
-                                                resolvedUrl = url
-                                                isResolving = false
-                                            }
-                                            .onFailure { error ->
-                                                resolvedUrl = ""
-                                                isResolving = false
-                                                errorMessage = error.message ?: "Failed to resolve playback url."
-                                            }
-                                    }
-                                }
-                            ) {
-                                Text("Retry")
-                            }
-                        }
-                    }
-                }
-
-                else -> {
-                    exoPlayer?.let {
-                        EmbeddedVideoPlayer(
-                            exoPlayer = it,
-                            modifier = Modifier.fillMaxWidth(),
-                            isFullScreen = isFullScreen,
-                            onToggleFullScreen = { isFullScreen = !isFullScreen },
-                            isFavorite = isFavorite,
-                            favoriteEnabled = !isFavoriteUpdating && updateFavorite != null && itemId.isNotBlank(),
-                            deleteEnabled = !isDeleting && deleteVideo != null && itemId.isNotBlank(),
-                            deleteInProgress = isDeleting,
-                            onToggleFavorite = handleToggleFavorite,
-                            onDelete = handleDelete,
-                            deleteLabel = deleteLabel,
-                            title = title.ifBlank { "Video" },
-                            onBack = onBack,
-                            showTopChrome = true,
-                            showFullScreenButton = false,
-                        )
-                    }
+            else -> {
+                exoPlayer?.let {
+                    EmbeddedVideoPlayer(
+                        exoPlayer = it,
+                        modifier = Modifier.fillMaxSize(),
+                        isFullScreen = true,
+                        onToggleFullScreen = {},
+                        isFavorite = isFavorite,
+                        favoriteEnabled = !isFavoriteUpdating && updateFavorite != null && itemId.isNotBlank(),
+                        deleteEnabled = !isDeleting && deleteVideo != null && itemId.isNotBlank(),
+                        deleteInProgress = isDeleting,
+                        onToggleFavorite = handleToggleFavorite,
+                        onDelete = handleDelete,
+                        playlist = playlist,
+                        currentPlaylistIndex = currentPlaylistIndex,
+                        onPlaylistItemSelected = onPlaylistItemSelected,
+                        onPlaybackEnded = onPlaybackEnded,
+                        deleteLabel = deleteLabel,
+                        title = title.ifBlank { "Video" },
+                        onBack = onBack,
+                        progressKey = itemId.ifBlank { pc.ifBlank { resolvedUrl } },
+                        showTopChrome = true,
+                        showFullScreenButton = false,
+                        forceFullScreen = true,
+                    )
                 }
             }
         }
@@ -348,9 +336,14 @@ fun EmbeddedVideoPlayer(
     deleteInProgress: Boolean = false,
     onToggleFavorite: () -> Unit = {},
     onDelete: () -> Unit = {},
+    playlist: List<PlayerPlaylistItem> = emptyList(),
+    currentPlaylistIndex: Int = -1,
+    onPlaylistItemSelected: (Int) -> Unit = {},
+    onPlaybackEnded: () -> Unit = {},
     title: String = "",
     deleteLabel: String = "",
     onBack: () -> Unit = {},
+    progressKey: String = "",
     showTopChrome: Boolean = false,
     showFullScreenButton: Boolean = true,
     forceFullScreen: Boolean = false,
@@ -369,9 +362,14 @@ fun EmbeddedVideoPlayer(
                     deleteInProgress = deleteInProgress,
                     onToggleFavorite = onToggleFavorite,
                     onDelete = onDelete,
+                    playlist = playlist,
+                    currentPlaylistIndex = currentPlaylistIndex,
+                    onPlaylistItemSelected = onPlaylistItemSelected,
+                    onPlaybackEnded = onPlaybackEnded,
                     title = title,
                     deleteLabel = deleteLabel,
                     onBack = onBack,
+                    progressKey = progressKey,
                     showTopChrome = showTopChrome,
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -394,9 +392,14 @@ fun EmbeddedVideoPlayer(
                             deleteInProgress = deleteInProgress,
                             onToggleFavorite = onToggleFavorite,
                             onDelete = onDelete,
+                            playlist = playlist,
+                            currentPlaylistIndex = currentPlaylistIndex,
+                            onPlaylistItemSelected = onPlaylistItemSelected,
+                            onPlaybackEnded = onPlaybackEnded,
                             title = title,
                             deleteLabel = deleteLabel,
                             onBack = onBack,
+                            progressKey = progressKey,
                             showTopChrome = showTopChrome,
                             modifier = Modifier.fillMaxSize()
                         )
@@ -424,9 +427,14 @@ fun EmbeddedVideoPlayer(
                     deleteInProgress = deleteInProgress,
                     onToggleFavorite = onToggleFavorite,
                     onDelete = onDelete,
+                    playlist = playlist,
+                    currentPlaylistIndex = currentPlaylistIndex,
+                    onPlaylistItemSelected = onPlaylistItemSelected,
+                    onPlaybackEnded = onPlaybackEnded,
                     title = title,
                     deleteLabel = deleteLabel,
                     onBack = onBack,
+                    progressKey = progressKey,
                     showTopChrome = showTopChrome,
                     modifier = Modifier.matchParentSize()
                 )
@@ -508,9 +516,14 @@ private fun PlayerContainer(
     deleteInProgress: Boolean,
     onToggleFavorite: () -> Unit,
     onDelete: () -> Unit,
+    playlist: List<PlayerPlaylistItem>,
+    currentPlaylistIndex: Int,
+    onPlaylistItemSelected: (Int) -> Unit,
+    onPlaybackEnded: () -> Unit,
     title: String,
     deleteLabel: String,
     onBack: () -> Unit,
+    progressKey: String,
     showTopChrome: Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -530,10 +543,18 @@ private fun PlayerContainer(
     var playbackSpeed by remember(exoPlayer) { mutableStateOf(exoPlayer.playbackParameters.speed) }
     var resizeMode by rememberSaveable { mutableStateOf(VideoResizeMode.Fit) }
     var controlsVisible by rememberSaveable { mutableStateOf(true) }
+    var controlsAutoHideNonce by remember { mutableLongStateOf(0L) }
+    var isControlsLocked by rememberSaveable { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var showPlaylistDialog by remember { mutableStateOf(false) }
     var isFastModeActive by remember { mutableStateOf(false) }
+    var isRetryingPlayback by remember { mutableStateOf(false) }
+    var retryAttempt by remember(exoPlayer) { mutableStateOf(0) }
     var previousControlsVisible by remember { mutableStateOf(true) }
     var skipNextTap by remember { mutableStateOf(false) }
+    var showSeekPreview by remember { mutableStateOf(false) }
+    var seekPreviewTargetMs by remember { mutableLongStateOf(0L) }
+    var seekGestureStartPositionMs by remember { mutableLongStateOf(0L) }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
     var showBrightnessIndicator by remember { mutableStateOf(false) }
     var brightnessIndicatorJob by remember { mutableStateOf<Job?>(null) }
@@ -547,6 +568,24 @@ private fun PlayerContainer(
     }
     var batteryLevel by remember { mutableStateOf(readBatteryLevel(context)) }
     var currentTime by remember { mutableStateOf(currentTimeText()) }
+    val progressPrefs = remember(context) {
+        context.getSharedPreferences(PLAYER_PROGRESS_PREFS, Context.MODE_PRIVATE)
+    }
+    val progressPrefKey = remember(progressKey) { "position:$progressKey" }
+    val markControlsInteraction: () -> Unit = {
+        controlsAutoHideNonce += 1L
+    }
+    val savePlaybackProgress: () -> Unit = {
+        val duration = exoPlayer.duration
+        val position = exoPlayer.currentPosition.coerceAtLeast(0L)
+        if (progressKey.isNotBlank() && duration > RESUME_MIN_DURATION_MS) {
+            if (position < RESUME_MIN_POSITION_MS || duration - position < RESUME_END_CLEAR_WINDOW_MS) {
+                progressPrefs.edit().remove(progressPrefKey).apply()
+            } else {
+                progressPrefs.edit().putLong(progressPrefKey, position).apply()
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -556,7 +595,18 @@ private fun PlayerContainer(
         }
     }
 
-    DisposableEffect(exoPlayer) {
+    LaunchedEffect(exoPlayer, progressKey) {
+        val savedPosition = progressPrefs.getLong(progressPrefKey, 0L)
+        if (savedPosition >= RESUME_MIN_POSITION_MS) {
+            exoPlayer.seekTo(savedPosition)
+            positionMs = savedPosition
+        } else if (progressKey.isNotBlank()) {
+            exoPlayer.seekTo(0L)
+            positionMs = 0L
+        }
+    }
+
+    DisposableEffect(exoPlayer, progressKey) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
@@ -567,10 +617,32 @@ private fun PlayerContainer(
                 if (!isSeeking) {
                     positionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
                 }
+                if (playbackState == Player.STATE_READY) {
+                    isRetryingPlayback = false
+                    retryAttempt = 0
+                } else if (playbackState == Player.STATE_ENDED) {
+                    progressPrefs.edit().remove(progressPrefKey).apply()
+                    onPlaybackEnded()
+                }
             }
 
             override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
                 playbackSpeed = playbackParameters.speed
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                if (retryAttempt >= PLAYBACK_RETRY_LIMIT) {
+                    isRetryingPlayback = false
+                    return
+                }
+
+                retryAttempt += 1
+                isRetryingPlayback = true
+                scope.launch {
+                    delay(PLAYBACK_RETRY_DELAY_MS * retryAttempt)
+                    exoPlayer.prepare()
+                    exoPlayer.play()
+                }
             }
         }
 
@@ -580,7 +652,15 @@ private fun PlayerContainer(
         isPlaying = exoPlayer.isPlaying
         playbackSpeed = exoPlayer.playbackParameters.speed
         onDispose {
+            savePlaybackProgress()
             exoPlayer.removeListener(listener)
+        }
+    }
+
+    LaunchedEffect(exoPlayer, progressKey) {
+        while (true) {
+            delay(PROGRESS_SAVE_INTERVAL_MS)
+            savePlaybackProgress()
         }
     }
 
@@ -596,13 +676,43 @@ private fun PlayerContainer(
         }
     }
 
+    DisposableEffect(activity, isPlaying) {
+        val window = activity?.window
+        if (window != null && isPlaying) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    LaunchedEffect(
+        controlsVisible,
+        controlsAutoHideNonce,
+        isFastModeActive,
+        isSeeking,
+        showDeleteDialog,
+        showSeekPreview,
+    ) {
+        if (
+            controlsVisible &&
+            !isFastModeActive &&
+            !isSeeking &&
+            !showDeleteDialog &&
+            !showSeekPreview
+        ) {
+            delay(5_000L)
+            controlsVisible = false
+        }
+    }
+
     Box(
         modifier = modifier
             .onSizeChanged { containerSize = it }
-            .pointerInput(exoPlayer, containerSize) {
+            .pointerInput(exoPlayer, containerSize, isControlsLocked) {
                 detectTapGestures(
-                    onPress = { offset ->
-                        if (containerSize.width <= 0 || offset.x < containerSize.width * (2f / 3f)) {
+                    onPress = {
+                        if (isControlsLocked || containerSize.width <= 0) {
                             return@detectTapGestures
                         }
 
@@ -617,6 +727,7 @@ private fun PlayerContainer(
                                 skipNextTap = true
                                 previousControlsVisible = controlsBeforeFastMode
                                 controlsVisible = false
+                                markControlsInteraction()
                                 isFastModeActive = true
                                 exoPlayer.setPlaybackParameters(PlaybackParameters(3f))
                                 playbackSpeed = 3f
@@ -631,16 +742,25 @@ private fun PlayerContainer(
                             playbackSpeed = speedBeforeFastMode
                             isFastModeActive = false
                             controlsVisible = previousControlsVisible
+                            markControlsInteraction()
                         }
                     },
                     onTap = { _ ->
+                        if (isControlsLocked) {
+                            controlsVisible = true
+                            markControlsInteraction()
+                            return@detectTapGestures
+                        }
                         if (skipNextTap) {
                             skipNextTap = false
                             return@detectTapGestures
                         }
                         controlsVisible = !controlsVisible
+                        markControlsInteraction()
                     },
                     onDoubleTap = { _ ->
+                        if (isControlsLocked) return@detectTapGestures
+                        markControlsInteraction()
                         if (exoPlayer.isPlaying) {
                             exoPlayer.pause()
                         } else {
@@ -649,28 +769,31 @@ private fun PlayerContainer(
                     }
                 )
             }
-            .pointerInput(audioManager) {
+            .pointerInput(audioManager, exoPlayer, isControlsLocked) {
                 var initialTouchX = 0f
                 var accumulatedX = 0f
                 var accumulatedY = 0f
-                var lockedTarget: SideAdjustTarget? = null
-                var gestureRejected = false
+                var lockedTarget: PlayerGestureTarget? = null
 
                 detectDragGestures(
                     onDragStart = { offset ->
-                        initialTouchX = offset.x
-                        accumulatedX = 0f
-                        accumulatedY = 0f
-                        lockedTarget = null
-                        gestureRejected = false
+                        if (!isControlsLocked) {
+                            initialTouchX = offset.x
+                            accumulatedX = 0f
+                            accumulatedY = 0f
+                            lockedTarget = null
+                            seekGestureStartPositionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                            markControlsInteraction()
+                        }
                     },
                     onDrag = { change, dragAmount ->
+                        if (isControlsLocked) return@detectDragGestures
                         if (size.height <= 0 || size.width <= 0) return@detectDragGestures
 
                         accumulatedX += dragAmount.x
                         accumulatedY += dragAmount.y
 
-                        if (lockedTarget == null && !gestureRejected) {
+                        if (lockedTarget == null) {
                             val absX = kotlin.math.abs(accumulatedX)
                             val absY = kotlin.math.abs(accumulatedY)
 
@@ -678,21 +801,31 @@ private fun PlayerContainer(
                                 return@detectDragGestures
                             }
 
-                            if (absY > absX) {
-                                lockedTarget = if (initialTouchX <= size.width / 2f) {
-                                    SideAdjustTarget.Brightness
-                                } else {
-                                    SideAdjustTarget.Volume
-                                }
+                            if (absX > absY) {
+                                lockedTarget = PlayerGestureTarget.Seek
+                                controlsVisible = false
                             } else {
-                                gestureRejected = true
-                                return@detectDragGestures
+                                lockedTarget = if (initialTouchX <= size.width / 2f) {
+                                    PlayerGestureTarget.Brightness
+                                } else {
+                                    PlayerGestureTarget.Volume
+                                }
                             }
                         }
 
+                        change.consume()
                         val dragRatio = (-dragAmount.y / size.height.toFloat()).coerceIn(-1f, 1f)
                         when (lockedTarget) {
-                            SideAdjustTarget.Brightness -> {
+                            PlayerGestureTarget.Seek -> {
+                                val safeDuration = exoPlayer.duration.takeIf { it > 0 } ?: return@detectDragGestures
+                                val maxSeekMs = minOf(safeDuration / 2L, 10 * 60 * 1000L).coerceAtLeast(30_000L)
+                                val deltaMs = (accumulatedX / size.width.toFloat() * maxSeekMs).toLong()
+                                seekPreviewTargetMs = (seekGestureStartPositionMs + deltaMs)
+                                    .coerceIn(0L, safeDuration)
+                                showSeekPreview = true
+                            }
+
+                            PlayerGestureTarget.Brightness -> {
                                 brightnessLevel = (brightnessLevel + dragRatio).coerceIn(0.05f, 1f)
                                 activity?.window?.attributes = activity?.window?.attributes?.apply {
                                     screenBrightness = brightnessLevel
@@ -705,7 +838,7 @@ private fun PlayerContainer(
                                 }
                             }
 
-                            SideAdjustTarget.Volume -> {
+                            PlayerGestureTarget.Volume -> {
                                 val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
                                 val nextVolume = (
                                     volumeLevel + dragRatio * maxVolume * 2f
@@ -728,18 +861,24 @@ private fun PlayerContainer(
                         }
                     },
                     onDragEnd = {
+                        if (lockedTarget == PlayerGestureTarget.Seek && showSeekPreview) {
+                            exoPlayer.seekTo(seekPreviewTargetMs)
+                            positionMs = seekPreviewTargetMs
+                            showSeekPreview = false
+                            controlsVisible = true
+                            markControlsInteraction()
+                        }
                         initialTouchX = 0f
                         accumulatedX = 0f
                         accumulatedY = 0f
                         lockedTarget = null
-                        gestureRejected = false
                     },
                     onDragCancel = {
+                        showSeekPreview = false
                         initialTouchX = 0f
                         accumulatedX = 0f
                         accumulatedY = 0f
                         lockedTarget = null
-                        gestureRejected = false
                     }
                 )
             }
@@ -750,7 +889,20 @@ private fun PlayerContainer(
             modifier = Modifier.matchParentSize()
         )
 
-        if (showTopChrome && controlsVisible && !isFastModeActive) {
+        AnimatedVisibility(
+            visible = controlsVisible && !isFastModeActive && !isControlsLocked,
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            PlayerChromeScrims(modifier = Modifier.fillMaxSize())
+        }
+
+        AnimatedVisibility(
+            visible = showTopChrome && controlsVisible && !isFastModeActive && !isControlsLocked,
+            modifier = Modifier.align(Alignment.TopCenter),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
             PlayerTopOverlay(
                 title = title,
                 currentTime = currentTime,
@@ -759,35 +911,63 @@ private fun PlayerContainer(
                 isFavorite = isFavorite,
                 favoriteEnabled = favoriteEnabled,
                 deleteEnabled = deleteEnabled,
+                showPlaylistButton = playlist.isNotEmpty(),
                 onBack = onBack,
+                onOpenPlaylist = {
+                    markControlsInteraction()
+                    showPlaylistDialog = true
+                },
                 onCycleResizeMode = {
+                    markControlsInteraction()
                     resizeMode = resizeMode.next()
                 },
-                onToggleFavorite = onToggleFavorite,
+                onToggleFavorite = {
+                    markControlsInteraction()
+                    onToggleFavorite()
+                },
                 onDelete = {
+                    markControlsInteraction()
                     showDeleteDialog = true
                 },
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
                     .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.safeDrawing)
                     .padding(horizontal = 8.dp, vertical = 8.dp)
             )
         }
 
-        if (controlsVisible && !isFastModeActive) {
+        AnimatedVisibility(
+            visible = controlsVisible && !isFastModeActive && !isControlsLocked,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
             VideoControlsOverlay(
                 isPlaying = isPlaying,
                 positionMs = if (isSeeking) sliderPositionMs.toLong() else positionMs,
                 durationMs = durationMs,
                 onPlayPause = {
+                    markControlsInteraction()
                     if (exoPlayer.isPlaying) {
                         exoPlayer.pause()
                     } else {
                         exoPlayer.play()
                     }
                 },
+                canPlayPrevious = currentPlaylistIndex > 0 && playlist.isNotEmpty(),
+                onPlayPrevious = {
+                    markControlsInteraction()
+                    onPlaylistItemSelected(currentPlaylistIndex - 1)
+                },
+                canPlayNext = currentPlaylistIndex >= 0 &&
+                    currentPlaylistIndex < playlist.lastIndex &&
+                    playlist.isNotEmpty(),
+                onPlayNext = {
+                    markControlsInteraction()
+                    onPlaylistItemSelected(currentPlaylistIndex + 1)
+                },
                 onSeekChange = { value ->
+                    markControlsInteraction()
                     if (!isSeeking) {
                         isSeeking = true
                     }
@@ -797,14 +977,16 @@ private fun PlayerContainer(
                     exoPlayer.seekTo(sliderPositionMs.toLong())
                     positionMs = sliderPositionMs.toLong()
                     isSeeking = false
+                    markControlsInteraction()
                 },
                 playbackSpeed = playbackSpeed,
-                onCyclePlaybackSpeed = {
-                    val nextSpeed = playbackSpeeds.nextAfter(playbackSpeed)
+                onPlaybackSpeedSelected = { nextSpeed ->
+                    markControlsInteraction()
                     exoPlayer.setPlaybackParameters(PlaybackParameters(nextSpeed))
                     playbackSpeed = nextSpeed
                 },
                 onToggleOrientation = {
+                    markControlsInteraction()
                     activity?.requestedOrientation =
                         if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
                             ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
@@ -813,9 +995,46 @@ private fun PlayerContainer(
                         }
                 },
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        }
+
+        AnimatedVisibility(
+            visible = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
+                !isFastModeActive &&
+                (controlsVisible || isControlsLocked),
+            modifier = Modifier.align(Alignment.CenterStart),
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            PlayerLockButton(
+                locked = isControlsLocked,
+                onClick = {
+                    isControlsLocked = !isControlsLocked
+                    controlsVisible = true
+                    markControlsInteraction()
+                },
+                modifier = Modifier
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .padding(start = 14.dp)
+            )
+        }
+
+        if (isRetryingPlayback) {
+            PlaybackRetryIndicator(
+                retryAttempt = retryAttempt,
+                modifier = Modifier.align(Alignment.Center)
+            )
+        }
+
+        if (showSeekPreview) {
+            SeekPreviewIndicator(
+                targetPositionMs = seekPreviewTargetMs,
+                durationMs = durationMs,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 84.dp)
             )
         }
 
@@ -835,7 +1054,13 @@ private fun PlayerContainer(
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .windowInsetsPadding(WindowInsets.safeDrawing)
-                    .padding(start = 12.dp)
+                    .padding(
+                        start = if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+                            68.dp
+                        } else {
+                            12.dp
+                        }
+                    )
             )
         }
 
@@ -858,36 +1083,30 @@ private fun PlayerContainer(
         }
     }
 
+    if (showPlaylistDialog) {
+        PlaylistDialog(
+            playlist = playlist,
+            currentIndex = currentPlaylistIndex,
+            onDismiss = { showPlaylistDialog = false },
+            onItemSelected = { index ->
+                showPlaylistDialog = false
+                onPlaylistItemSelected(index)
+            },
+        )
+    }
+
     if (showDeleteDialog) {
-        AlertDialog(
-            onDismissRequest = {
-                if (deleteInProgress) return@AlertDialog
+        DeleteConfirmDialog(
+            message = "确定要删除《${title.ifBlank { "当前影片" }}》吗？",
+            deleting = deleteInProgress,
+            onDismiss = {
+                if (!deleteInProgress) showDeleteDialog = false
+            },
+            onConfirm = {
                 showDeleteDialog = false
+                onDelete()
             },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onDelete()
-                    },
-                    enabled = deleteEnabled,
-                ) {
-                    Text(if (deleteEnabled) "确认删除" else "删除中...")
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { showDeleteDialog = false },
-                    enabled = deleteEnabled,
-                ) {
-                    Text("取消")
-                }
-            },
-            title = {
-                Text("确认删除")
-            },
-            text = {
-                Text("确定要删除《${title.ifBlank { "当前影片" }}》吗？")
-            }
+            confirmEnabled = deleteEnabled,
         )
     }
 }
@@ -902,7 +1121,9 @@ private fun PlayerTopOverlay(
     isFavorite: Boolean,
     favoriteEnabled: Boolean,
     deleteEnabled: Boolean,
+    showPlaylistButton: Boolean,
     onBack: () -> Unit,
+    onOpenPlaylist: () -> Unit,
     onCycleResizeMode: () -> Unit,
     onToggleFavorite: () -> Unit,
     onDelete: () -> Unit,
@@ -940,6 +1161,18 @@ private fun PlayerTopOverlay(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(2.dp)
         ) {
+            if (showPlaylistButton) {
+                PlayerOverlayIconButton(
+                    onClick = onOpenPlaylist,
+                    modifier = Modifier.size(36.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.List,
+                        contentDescription = "Playlist",
+                        tint = Color.White,
+                    )
+                }
+            }
             PlayerOverlayIconButton(
                 onClick = onCycleResizeMode,
                 modifier = Modifier.size(36.dp),
@@ -1032,6 +1265,175 @@ private fun FastModeIndicator(
 }
 
 @Composable
+private fun PlayerChromeScrims(
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier = modifier) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .height(104.dp)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Black.copy(alpha = 0.42f),
+                            Color.Transparent,
+                        )
+                    )
+                )
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(132.dp)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            Color.Black.copy(alpha = 0.46f),
+                        )
+                    )
+                )
+        )
+    }
+}
+
+@Composable
+private fun PlayerLockButton(
+    locked: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .size(42.dp)
+            .clickable(onClick = onClick),
+        shape = CircleShape,
+        color = Color(0x66000000),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = if (locked) Icons.Rounded.Lock else Icons.Rounded.LockOpen,
+                contentDescription = if (locked) "Unlock controls" else "Lock controls",
+                tint = Color.White,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlaybackRetryIndicator(
+    retryAttempt: Int,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(999.dp),
+        color = Color(0x99000000),
+    ) {
+        Text(
+            text = "重新连接中 $retryAttempt/$PLAYBACK_RETRY_LIMIT",
+            color = Color.White,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        )
+    }
+}
+
+@Composable
+private fun SeekPreviewIndicator(
+    targetPositionMs: Long,
+    durationMs: Long,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(999.dp),
+        color = Color(0x99000000),
+    ) {
+        Text(
+            text = "${formatPlayerTime(targetPositionMs)}/${formatPlayerTime(durationMs)}",
+            color = Color.White,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+        )
+    }
+}
+
+@Composable
+private fun PlaylistDialog(
+    playlist: List<PlayerPlaylistItem>,
+    currentIndex: Int,
+    onDismiss: () -> Unit,
+    onItemSelected: (Int) -> Unit,
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        val configuration = LocalConfiguration.current
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable { onDismiss() },
+            contentAlignment = Alignment.Center,
+        ) {
+            val horizontalPadding = if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+                maxWidth * 0.15f
+            } else {
+                maxWidth * 0.10f
+            }
+            val verticalPadding = if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+                maxHeight * 0.10f
+            } else {
+                maxHeight * 0.15f
+            }
+
+            Surface(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = horizontalPadding, vertical = verticalPadding)
+                    .clickable { },
+                shape = RoundedCornerShape(18.dp),
+                color = Color(0xCC3A3A3A),
+            ) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                ) {
+                    itemsIndexed(playlist) { index, item ->
+                        val selected = index == currentIndex
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onItemSelected(index) }
+                                .background(
+                                    if (selected) Color.White.copy(alpha = 0.14f) else Color.Transparent
+                                )
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                        ) {
+                            Text(
+                                text = item.title.ifBlank { item.deleteLabel },
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun BatteryLevelBadge(
     level: Int,
     modifier: Modifier = Modifier,
@@ -1075,10 +1477,11 @@ private fun BatteryLevelBadge(
 private fun PlayerBottomControlButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    size: androidx.compose.ui.unit.Dp = 42.dp,
     content: @Composable RowScope.() -> Unit,
 ) {
     Box(
-        modifier = modifier.size(42.dp),
+        modifier = modifier.size(size),
         contentAlignment = Alignment.Center
     ) {
         IconButton(
@@ -1152,85 +1555,195 @@ private fun VideoControlsOverlay(
     positionMs: Long,
     durationMs: Long,
     onPlayPause: () -> Unit,
+    canPlayPrevious: Boolean,
+    onPlayPrevious: () -> Unit,
+    canPlayNext: Boolean,
+    onPlayNext: () -> Unit,
     onSeekChange: (Float) -> Unit,
     onSeekEnd: () -> Unit,
     playbackSpeed: Float,
-    onCyclePlaybackSpeed: () -> Unit,
+    onPlaybackSpeedSelected: (Float) -> Unit,
     onToggleOrientation: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val safeDurationMs = durationMs.takeIf { it > 0 } ?: 1L
 
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(1.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = formatPlayerTime(positionMs),
-                color = Color.White,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Medium,
-            )
-            VideoSeekBar(
-                positionMs = positionMs,
-                durationMs = safeDurationMs,
-                onSeekChange = onSeekChange,
-                onSeekEnd = onSeekEnd,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 10.dp)
-            )
-            Text(
-                text = formatPlayerTime(durationMs),
-                color = Color.White,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Medium,
-            )
+    BoxWithConstraints(modifier = modifier) {
+        val compactControls = maxWidth < 380.dp
+        val showInlineSpeeds = maxWidth >= 520.dp
+        val buttonSize = if (compactControls) 36.dp else 42.dp
+        val timeTextStyle = if (compactControls) {
+            MaterialTheme.typography.labelSmall
+        } else {
+            MaterialTheme.typography.labelMedium
         }
 
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(if (compactControls) 0.dp else 1.dp)
         ) {
-            PlayerBottomControlButton(
-                onClick = onPlayPause
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                    contentDescription = if (isPlaying) "Pause" else "Play",
-                    tint = Color.White,
-                    modifier = Modifier.size(22.dp),
+                Text(
+                    text = formatPlayerTime(positionMs),
+                    color = Color.White,
+                    style = timeTextStyle,
+                    fontWeight = FontWeight.Medium,
+                )
+                VideoSeekBar(
+                    positionMs = positionMs,
+                    durationMs = safeDurationMs,
+                    onSeekChange = onSeekChange,
+                    onSeekEnd = onSeekEnd,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = if (compactControls) 6.dp else 10.dp)
+                )
+                Text(
+                    text = formatPlayerTime(durationMs),
+                    color = Color.White,
+                    style = timeTextStyle,
+                    fontWeight = FontWeight.Medium,
                 )
             }
 
             Row(
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 PlayerBottomControlButton(
-                    onClick = onCyclePlaybackSpeed
-                ) {
-                    Text(
-                        text = formatPlaybackSpeed(playbackSpeed),
-                        color = Color.White,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Medium,
-                        fontSize = 14.sp,
-                    )
-                }
-                PlayerBottomControlButton(
-                    onClick = onToggleOrientation
+                    onClick = onPlayPause,
+                    size = buttonSize,
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.ScreenRotationAlt,
-                        contentDescription = "Rotate screen",
+                        imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
                         tint = Color.White,
-                        modifier = Modifier.size(22.dp),
+                        modifier = Modifier.size(if (compactControls) 20.dp else 22.dp),
+                    )
+                }
+
+                if (canPlayPrevious) {
+                    PlayerBottomControlButton(
+                        onClick = onPlayPrevious,
+                        size = buttonSize,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.SkipPrevious,
+                            contentDescription = "Previous video",
+                            tint = Color.White,
+                            modifier = Modifier.size(if (compactControls) 20.dp else 22.dp),
+                        )
+                    }
+                }
+
+                if (canPlayNext) {
+                    PlayerBottomControlButton(
+                        onClick = onPlayNext,
+                        size = buttonSize,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.SkipNext,
+                            contentDescription = "Next video",
+                            tint = Color.White,
+                            modifier = Modifier.size(if (compactControls) 20.dp else 22.dp),
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SpeedSelector(
+                        playbackSpeed = playbackSpeed,
+                        showInlineSpeeds = showInlineSpeeds,
+                        compact = compactControls,
+                        onPlaybackSpeedSelected = onPlaybackSpeedSelected,
+                    )
+
+                    PlayerBottomControlButton(
+                        onClick = onToggleOrientation,
+                        size = buttonSize,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.ScreenRotationAlt,
+                            contentDescription = "Rotate screen",
+                            tint = Color.White,
+                            modifier = Modifier.size(if (compactControls) 20.dp else 22.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SpeedSelector(
+    playbackSpeed: Float,
+    showInlineSpeeds: Boolean,
+    compact: Boolean,
+    onPlaybackSpeedSelected: (Float) -> Unit,
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    if (showInlineSpeeds) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            playbackSpeeds.forEach { speed ->
+                val selected = kotlin.math.abs(speed - playbackSpeed) < 0.01f
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = if (selected) Color.White.copy(alpha = 0.24f) else Color.White.copy(alpha = 0.08f),
+                    modifier = Modifier
+                        .size(width = 44.dp, height = 32.dp)
+                        .clickable { onPlaybackSpeedSelected(speed) },
+                ) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = formatPlaybackSpeed(speed),
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                        )
+                    }
+                }
+            }
+        }
+    } else {
+        Box {
+            PlayerBottomControlButton(
+                onClick = { menuExpanded = true },
+                size = if (compact) 36.dp else 42.dp,
+            ) {
+                Text(
+                    text = formatPlaybackSpeed(playbackSpeed),
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = if (compact) 12.sp else 14.sp,
+                )
+            }
+            DropdownMenu(
+                expanded = menuExpanded,
+                onDismissRequest = { menuExpanded = false },
+            ) {
+                playbackSpeeds.forEach { speed ->
+                    DropdownMenuItem(
+                        text = { Text(formatPlaybackSpeed(speed)) },
+                        onClick = {
+                            menuExpanded = false
+                            onPlaybackSpeedSelected(speed)
+                        },
                     )
                 }
             }
@@ -1356,15 +1869,6 @@ private fun batteryTint(level: Int): Color {
     }
 }
 
-private fun List<Float>.nextAfter(current: Float): Float {
-    val currentIndex = indexOfFirst { kotlin.math.abs(it - current) < 0.01f }
-    return if (currentIndex == -1 || currentIndex == lastIndex) {
-        first()
-    } else {
-        this[currentIndex + 1]
-    }
-}
-
 private fun Context.findActivity(): Activity? {
     var current: Context? = this
     while (current is ContextWrapper) {
@@ -1374,10 +1878,19 @@ private fun Context.findActivity(): Activity? {
     return null
 }
 
-private enum class SideAdjustTarget {
+private enum class PlayerGestureTarget {
+    Seek,
     Brightness,
     Volume,
 }
+
+private const val PLAYER_PROGRESS_PREFS = "player_progress"
+private const val RESUME_MIN_DURATION_MS = 60_000L
+private const val RESUME_MIN_POSITION_MS = 10_000L
+private const val RESUME_END_CLEAR_WINDOW_MS = 15_000L
+private const val PROGRESS_SAVE_INTERVAL_MS = 5_000L
+private const val PLAYBACK_RETRY_LIMIT = 2
+private const val PLAYBACK_RETRY_DELAY_MS = 1_200L
 
 private val playbackSpeeds = listOf(0.5f, 0.75f, 1f, 1.5f, 2f, 3f, 4f, 5f)
 

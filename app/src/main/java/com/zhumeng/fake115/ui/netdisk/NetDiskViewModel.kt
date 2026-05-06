@@ -1,20 +1,23 @@
 package com.zhumeng.fake115.ui.netdisk
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.zhumeng.fake115.data.NetDiskRepository
+import com.zhumeng.fake115.data.model.FavoriteFilterMode
 import com.zhumeng.fake115.data.model.NetDiskFile
 import com.zhumeng.fake115.data.model.NetDiskPathNode
 import com.zhumeng.fake115.data.model.NetDiskQuery
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.math.ceil
 
-private const val LOAD_ERROR = "\u52a0\u8f7d\u7f51\u76d8\u6587\u4ef6\u5931\u8d25\u3002"
+private const val LOAD_ERROR = "加载网盘文件失败。"
 
 enum class NetDiskSortOption(
     val queryValue: String,
@@ -31,11 +34,17 @@ enum class NetDiskSortOption(
     }
 }
 
+enum class NetDiskViewMode {
+    List,
+    Waterfall,
+}
+
 data class NetDiskUiState(
     val isLoading: Boolean = true,
     val isRefreshing: Boolean = false,
     val isLoadingMore: Boolean = false,
     val errorMessage: String? = null,
+    val rawFiles: List<NetDiskFile> = emptyList(),
     val files: List<NetDiskFile> = emptyList(),
     val count: Int = 0,
     val offset: Int = 0,
@@ -43,11 +52,15 @@ data class NetDiskUiState(
     val currentCid: String = "0",
     val path: List<NetDiskPathNode> = emptyList(),
     val onlyVideos: Boolean = false,
+    val favoriteFilter: FavoriteFilterMode = FavoriteFilterMode.All,
     val sortOption: NetDiskSortOption = NetDiskSortOption.FileSize,
     val isAscending: Boolean = false,
+    val viewMode: NetDiskViewMode = NetDiskViewMode.List,
+    val starUpdatingIds: Set<String> = emptySet(),
+    val deletingIds: Set<String> = emptySet(),
 ) {
     val hasMore: Boolean
-        get() = files.size + offset < count
+        get() = rawFiles.size + offset < count
 
     val currentPage: Int
         get() = (offset / limit) + 1
@@ -66,17 +79,57 @@ class NetDiskViewModel(
     application: Application,
 ) : AndroidViewModel(application) {
     private val repository = NetDiskRepository(application)
-    private val _uiState = MutableStateFlow(NetDiskUiState())
+    private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val _uiState = MutableStateFlow(loadSavedFilters())
     val uiState: StateFlow<NetDiskUiState> = _uiState.asStateFlow()
 
     init {
+        observeRepositoryEvents()
+        val current = _uiState.value
         loadFiles(
-            cid = "0",
+            cid = current.currentCid,
             offset = 0,
             isRefreshing = false,
             append = false,
-            onlyVideos = false,
+            onlyVideos = current.onlyVideos,
         )
+    }
+
+    private fun observeRepositoryEvents() {
+        viewModelScope.launch {
+            NetDiskRepository.starredFileEvents.collect { event ->
+                updateFileStarLocally(event.fileId, event.isStarred)
+            }
+        }
+        viewModelScope.launch {
+            NetDiskRepository.deletedFileEvents.collect { fileId ->
+                removeFileLocally(fileId)
+            }
+        }
+    }
+
+    private fun updateFileStarLocally(fileId: String, isStarred: Boolean) {
+        _uiState.update { state ->
+            val rawFiles = state.rawFiles.map { file ->
+                if (file.id == fileId) file.copy(isStarred = isStarred) else file
+            }
+            state.copy(
+                rawFiles = rawFiles,
+                files = rawFiles.applyFavoriteFilter(state.favoriteFilter),
+            )
+        }
+    }
+
+    private fun removeFileLocally(fileId: String) {
+        _uiState.update { state ->
+            val existed = state.rawFiles.any { it.id == fileId }
+            val rawFiles = state.rawFiles.filterNot { it.id == fileId }
+            state.copy(
+                rawFiles = rawFiles,
+                files = rawFiles.applyFavoriteFilter(state.favoriteFilter),
+                count = if (existed) (state.count - 1).coerceAtLeast(0) else state.count,
+            )
+        }
     }
 
     fun refresh() {
@@ -95,7 +148,7 @@ class NetDiskViewModel(
         if (current.isLoading || current.isRefreshing || current.isLoadingMore || !current.hasMore) return
         loadFiles(
             cid = current.currentCid,
-            offset = current.offset + current.files.size,
+            offset = current.offset + current.rawFiles.size,
             isRefreshing = false,
             append = true,
             onlyVideos = current.onlyVideos,
@@ -138,16 +191,40 @@ class NetDiskViewModel(
     fun toggleVideoFilter() {
         val nextOnlyVideos = !_uiState.value.onlyVideos
         _uiState.update { it.copy(onlyVideos = nextOnlyVideos) }
+        saveFilters()
         reloadFromFirstPage(onlyVideos = nextOnlyVideos)
+    }
+
+    fun cycleFavoriteFilter() {
+        _uiState.update { state ->
+            val next = when (state.favoriteFilter) {
+                FavoriteFilterMode.All -> FavoriteFilterMode.Favorite
+                FavoriteFilterMode.Favorite -> FavoriteFilterMode.Unfavorite
+                FavoriteFilterMode.Unfavorite -> FavoriteFilterMode.All
+            }
+            state.copy(
+                favoriteFilter = next,
+                files = state.rawFiles.applyFavoriteFilter(next),
+            )
+        }
+        saveFilters()
     }
 
     fun cycleSortOption() {
         _uiState.update { it.copy(sortOption = it.sortOption.next()) }
+        saveFilters()
+        reloadFromFirstPage(onlyVideos = _uiState.value.onlyVideos)
+    }
+
+    fun setSortOption(option: NetDiskSortOption) {
+        _uiState.update { it.copy(sortOption = option) }
+        saveFilters()
         reloadFromFirstPage(onlyVideos = _uiState.value.onlyVideos)
     }
 
     fun toggleSortOrder() {
         _uiState.update { it.copy(isAscending = !it.isAscending) }
+        saveFilters()
         reloadFromFirstPage(onlyVideos = _uiState.value.onlyVideos)
     }
 
@@ -157,11 +234,95 @@ class NetDiskViewModel(
                 limit = when (it.limit) {
                     20 -> 50
                     50 -> 100
+                    100 -> 1150
                     else -> 20
                 }
             )
         }
+        saveFilters()
         reloadFromFirstPage(onlyVideos = _uiState.value.onlyVideos)
+    }
+
+    fun toggleViewMode() {
+        _uiState.update {
+            it.copy(
+                viewMode = when (it.viewMode) {
+                    NetDiskViewMode.List -> NetDiskViewMode.Waterfall
+                    NetDiskViewMode.Waterfall -> NetDiskViewMode.List
+                }
+            )
+        }
+        saveFilters()
+    }
+
+    fun toggleFileStar(fileId: String) {
+        val current = _uiState.value
+        if (fileId in current.starUpdatingIds) return
+        val file = current.rawFiles.firstOrNull { it.id == fileId } ?: return
+        val nextStarred = !file.isStarred
+        _uiState.update {
+            it.copy(starUpdatingIds = it.starUpdatingIds + fileId)
+        }
+        viewModelScope.launch {
+            runCatching {
+                repository.updateStar(fileId = fileId, star = nextStarred)
+            }.onFailure {
+                // Keep the current list as-is; the repository event updates it after a successful request.
+            }
+            _uiState.update {
+                it.copy(starUpdatingIds = it.starUpdatingIds - fileId)
+            }
+        }
+    }
+
+    fun deleteFile(fileId: String) {
+        val current = _uiState.value
+        if (fileId in current.deletingIds) return
+        if (current.rawFiles.none { it.id == fileId }) return
+        _uiState.update {
+            it.copy(deletingIds = it.deletingIds + fileId)
+        }
+        viewModelScope.launch {
+            runCatching {
+                repository.deleteFile(fileId)
+                NetDiskRepository.notifyFileDeleted(fileId)
+            }
+            _uiState.update {
+                it.copy(deletingIds = it.deletingIds - fileId)
+            }
+        }
+    }
+
+    private fun loadSavedFilters(): NetDiskUiState {
+        return NetDiskUiState(
+            onlyVideos = prefs.getBoolean(KEY_ONLY_VIDEOS, false),
+            favoriteFilter = FavoriteFilterMode.entries.firstOrNull {
+                it.name == prefs.getString(KEY_FAVORITE_FILTER, FavoriteFilterMode.All.name)
+            } ?: FavoriteFilterMode.All,
+            sortOption = NetDiskSortOption.entries.firstOrNull {
+                it.queryValue == prefs.getString(KEY_SORT_OPTION, NetDiskSortOption.FileSize.queryValue)
+            } ?: NetDiskSortOption.FileSize,
+            isAscending = prefs.getBoolean(KEY_IS_ASCENDING, false),
+            limit = prefs.getInt(KEY_PAGE_SIZE, DEFAULT_PAGE_SIZE).takeIf {
+                it in PAGE_SIZE_OPTIONS
+            } ?: DEFAULT_PAGE_SIZE,
+            currentCid = prefs.getString(KEY_CURRENT_CID, "0")?.ifBlank { "0" } ?: "0",
+            viewMode = NetDiskViewMode.entries.firstOrNull {
+                it.name == prefs.getString(KEY_VIEW_MODE, NetDiskViewMode.List.name)
+            } ?: NetDiskViewMode.List,
+        )
+    }
+
+    private fun saveFilters() {
+        val current = _uiState.value
+        prefs.edit()
+            .putBoolean(KEY_ONLY_VIDEOS, current.onlyVideos)
+            .putString(KEY_FAVORITE_FILTER, current.favoriteFilter.name)
+            .putString(KEY_SORT_OPTION, current.sortOption.queryValue)
+            .putBoolean(KEY_IS_ASCENDING, current.isAscending)
+            .putInt(KEY_PAGE_SIZE, current.limit)
+            .putString(KEY_VIEW_MODE, current.viewMode.name)
+            .apply()
     }
 
     fun previousPage(): Int? {
@@ -236,18 +397,25 @@ class NetDiskViewModel(
                 )
             }.onSuccess { response ->
                 _uiState.update {
+                    val rawFiles = if (append) it.rawFiles + response.files else response.files
                     it.copy(
                         isLoading = false,
                         isRefreshing = false,
                         isLoadingMore = false,
                         errorMessage = null,
-                        files = if (append) it.files + response.files else response.files,
+                        rawFiles = rawFiles,
+                        files = rawFiles.applyFavoriteFilter(it.favoriteFilter),
                         count = response.count,
                         offset = if (append) it.offset else response.offset,
                         limit = response.limit,
                         currentCid = response.cid.ifBlank { cid },
                         path = response.path,
                     )
+                }
+                if (!append) {
+                    prefs.edit()
+                        .putString(KEY_CURRENT_CID, response.cid.ifBlank { cid })
+                        .apply()
                 }
             }.onFailure { error ->
                 _uiState.update {
@@ -260,5 +428,26 @@ class NetDiskViewModel(
                 }
             }
         }
+    }
+
+    private companion object {
+        const val PREFS_NAME = "netdisk_prefs"
+        const val KEY_ONLY_VIDEOS = "only_videos"
+        const val KEY_FAVORITE_FILTER = "favorite_filter"
+        const val KEY_SORT_OPTION = "sort_option"
+        const val KEY_IS_ASCENDING = "is_ascending"
+        const val KEY_PAGE_SIZE = "page_size"
+        const val KEY_CURRENT_CID = "current_cid"
+        const val KEY_VIEW_MODE = "view_mode"
+        const val DEFAULT_PAGE_SIZE = 50
+        val PAGE_SIZE_OPTIONS = setOf(20, 50, 100, 1150)
+    }
+}
+
+private fun List<NetDiskFile>.applyFavoriteFilter(filter: FavoriteFilterMode): List<NetDiskFile> {
+    return when (filter) {
+        FavoriteFilterMode.All -> this
+        FavoriteFilterMode.Favorite -> filter { it.isStarred }
+        FavoriteFilterMode.Unfavorite -> filterNot { it.isStarred }
     }
 }
