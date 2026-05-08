@@ -182,6 +182,7 @@ class PlayerActivity : ComponentActivity() {
         private const val EXTRA_PLAYLIST_DELETE_LABELS = "extra_playlist_delete_labels"
         private const val EXTRA_PLAYLIST_PCS = "extra_playlist_pcs"
         private const val EXTRA_PLAYLIST_FAVORITES = "extra_playlist_favorites"
+        private const val MAX_INTENT_PLAYLIST_ITEMS = 150
 
         fun createIntent(
             context: Context,
@@ -192,6 +193,7 @@ class PlayerActivity : ComponentActivity() {
             isFavorite: Boolean,
             playlist: List<LibraryMovie> = emptyList(),
         ): Intent {
+            val safePlaylist = playlist.takeIntentWindow { it.id == videoId }
             return Intent(context, PlayerActivity::class.java).apply {
                 putExtra(EXTRA_VIDEO_ID, videoId)
                 putExtra(EXTRA_ITEM_ID, videoId.toString())
@@ -201,12 +203,12 @@ class PlayerActivity : ComponentActivity() {
                 putExtra(EXTRA_IS_FAVORITE, isFavorite)
                 putStringArrayListExtra(
                     EXTRA_PLAYLIST_IDS,
-                    ArrayList(playlist.map { it.id.toString() }),
+                    ArrayList(safePlaylist.map { it.id.toString() }),
                 )
                 putStringArrayListExtra(
                     EXTRA_PLAYLIST_TITLES,
                     ArrayList(
-                        playlist.map { movie ->
+                        safePlaylist.map { movie ->
                             listOf(movie.fanhao, movie.name)
                                 .filter { it.isNotBlank() }
                                 .joinToString(" ")
@@ -216,10 +218,10 @@ class PlayerActivity : ComponentActivity() {
                 )
                 putStringArrayListExtra(
                     EXTRA_PLAYLIST_DELETE_LABELS,
-                    ArrayList(playlist.map { it.fanhao.ifBlank { it.name } }),
+                    ArrayList(safePlaylist.map { it.fanhao.ifBlank { it.name } }),
                 )
-                putStringArrayListExtra(EXTRA_PLAYLIST_PCS, ArrayList(playlist.map { it.pc }))
-                putExtra(EXTRA_PLAYLIST_FAVORITES, playlist.map { it.isFavorite == 1 }.toBooleanArray())
+                putStringArrayListExtra(EXTRA_PLAYLIST_PCS, ArrayList(safePlaylist.map { it.pc }))
+                putExtra(EXTRA_PLAYLIST_FAVORITES, safePlaylist.map { it.isFavorite == 1 }.toBooleanArray())
             }
         }
 
@@ -232,6 +234,7 @@ class PlayerActivity : ComponentActivity() {
             isFavorite: Boolean,
             playlist: List<NetDiskFile> = emptyList(),
         ): Intent {
+            val safePlaylist = playlist.takeIntentWindow { it.id == fileId }
             return Intent(context, PlayerActivity::class.java).apply {
                 putExtra(EXTRA_ITEM_ID, fileId)
                 putExtra(EXTRA_TITLE, title)
@@ -241,22 +244,31 @@ class PlayerActivity : ComponentActivity() {
                 putExtra(EXTRA_USE_NET_DISK_ACTIONS, true)
                 putStringArrayListExtra(
                     EXTRA_PLAYLIST_IDS,
-                    ArrayList(playlist.map { it.id }),
+                    ArrayList(safePlaylist.map { it.id }),
                 )
                 putStringArrayListExtra(
                     EXTRA_PLAYLIST_TITLES,
-                    ArrayList(playlist.map { it.n }),
+                    ArrayList(safePlaylist.map { it.n }),
                 )
                 putStringArrayListExtra(
                     EXTRA_PLAYLIST_DELETE_LABELS,
-                    ArrayList(playlist.map { it.n }),
+                    ArrayList(safePlaylist.map { it.n }),
                 )
                 putStringArrayListExtra(
                     EXTRA_PLAYLIST_PCS,
-                    ArrayList(playlist.map { it.pc.orEmpty() }),
+                    ArrayList(safePlaylist.map { it.pc.orEmpty() }),
                 )
-                putExtra(EXTRA_PLAYLIST_FAVORITES, playlist.map { it.isStarred }.toBooleanArray())
+                putExtra(EXTRA_PLAYLIST_FAVORITES, safePlaylist.map { it.isStarred }.toBooleanArray())
             }
+        }
+
+        private fun <T> List<T>.takeIntentWindow(isCurrent: (T) -> Boolean): List<T> {
+            if (size <= MAX_INTENT_PLAYLIST_ITEMS) return this
+            val currentIndex = indexOfFirst(isCurrent)
+            if (currentIndex < 0) return take(MAX_INTENT_PLAYLIST_ITEMS)
+            val half = MAX_INTENT_PLAYLIST_ITEMS / 2
+            val start = (currentIndex - half).coerceIn(0, (size - MAX_INTENT_PLAYLIST_ITEMS).coerceAtLeast(0))
+            return subList(start, (start + MAX_INTENT_PLAYLIST_ITEMS).coerceAtMost(size))
         }
     }
 }

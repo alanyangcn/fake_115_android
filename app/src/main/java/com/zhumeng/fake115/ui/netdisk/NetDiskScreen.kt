@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -39,6 +40,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.rounded.AccessTime
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Folder
@@ -84,6 +86,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -162,6 +165,13 @@ fun NetDiskScreen(
         }
     }
 
+    LaunchedEffect(state.contentResetVersion) {
+        if (state.contentResetVersion > 0) {
+            listState.scrollToItem(0)
+            gridState.scrollToItem(0)
+        }
+    }
+
     LaunchedEffect(state.isLoading, state.isRefreshing, state.isLoadingMore) {
         if (!state.isLoading && !state.isRefreshing && !state.isLoadingMore) {
             pageButtonLocked = false
@@ -197,19 +207,32 @@ fun NetDiskScreen(
 
     fun openFile(file: NetDiskFile) {
         if (file.isVideo && !file.pc.isNullOrBlank()) {
-            context.startActivity(
-                PlayerActivity.createNetDiskIntent(
-                    context = context,
-                    fileId = file.id,
-                    title = file.n,
-                    deleteLabel = file.n,
-                    pc = file.pc,
-                    isFavorite = file.isStarred,
-                    playlist = state.files.filter {
-                        it.isVideo && !it.pc.isNullOrBlank()
-                    },
-                )
+            val playlist = state.files.filter {
+                it.isVideo && !it.pc.isNullOrBlank()
+            }
+            val playerIntent = PlayerActivity.createNetDiskIntent(
+                context = context,
+                fileId = file.id,
+                title = file.n,
+                deleteLabel = file.n,
+                pc = file.pc,
+                isFavorite = file.isStarred,
+                playlist = playlist,
             )
+            runCatching {
+                context.startActivity(playerIntent)
+            }.onFailure {
+                context.startActivity(
+                    PlayerActivity.createNetDiskIntent(
+                        context = context,
+                        fileId = file.id,
+                        title = file.n,
+                        deleteLabel = file.n,
+                        pc = file.pc,
+                        isFavorite = file.isStarred,
+                    )
+                )
+            }
         } else if (file.isDirectory) {
             viewModel.openDirectory(file)
         }
@@ -367,7 +390,10 @@ fun NetDiskScreen(
             state = state,
             pageButtonsEnabled = !pageButtonLocked,
             onPreviousPage = { handlePagedAction(viewModel::previousPage) },
+            onGoToPage = { page -> handlePagedAction { viewModel.goToPage(page) } },
             onNextPage = { handlePagedAction(viewModel::nextPage) },
+            onLoadAll = viewModel::loadAllFiles,
+            onToggleDurationSort = viewModel::toggleDurationSort,
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .padding(
@@ -502,10 +528,16 @@ private fun NetDiskPagerFloatingControls(
     state: NetDiskUiState,
     pageButtonsEnabled: Boolean,
     onPreviousPage: () -> Unit,
+    onGoToPage: (Int) -> Unit,
     onNextPage: () -> Unit,
+    onLoadAll: () -> Unit,
+    onToggleDurationSort: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = AppTheme.colors
+    val maxMenuHeight = LocalConfiguration.current.screenHeightDp.dp * 0.5f
+    var pageMenuExpanded by remember { mutableStateOf(false) }
+    val busy = state.isLoading || state.isRefreshing || state.isLoadingMore || state.isLoadingAll
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(14.dp),
@@ -520,22 +552,66 @@ private fun NetDiskPagerFloatingControls(
                 icon = Icons.AutoMirrored.Rounded.ArrowBack,
                 contentDescription = "上一页",
                 onClick = onPreviousPage,
-                enabled = pageButtonsEnabled &&
-                    state.hasPreviousPage &&
-                    !state.isLoading &&
-                    !state.isRefreshing &&
-                    !state.isLoadingMore,
+                enabled = pageButtonsEnabled && state.hasPreviousPage && !busy,
             )
+            Box {
+                NetDiskFloatingTextButton(
+                    text = state.currentPage.toString(),
+                    contentDescription = "选择页码",
+                    onClick = { pageMenuExpanded = true },
+                    enabled = !busy && state.totalPages > 1,
+                )
+                DropdownMenu(
+                    expanded = pageMenuExpanded,
+                    onDismissRequest = { pageMenuExpanded = false },
+                    modifier = Modifier
+                        .width(58.dp)
+                        .heightIn(max = maxMenuHeight),
+                    containerColor = colors.elevatedSurface.copy(alpha = 0.96f),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    repeat(state.totalPages) { index ->
+                        val page = index + 1
+                        Text(
+                            text = page.toString(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color.Transparent)
+                                .clickable {
+                                    pageMenuExpanded = false
+                                    onGoToPage(page)
+                                }
+                                .padding(horizontal = 6.dp, vertical = 9.dp),
+                            color = if (page == state.currentPage) colors.accentText else colors.textPrimary,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = if (page == state.currentPage) FontWeight.Bold else FontWeight.Normal,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
             NetDiskFloatingIconButton(
                 icon = Icons.AutoMirrored.Rounded.ArrowForward,
                 contentDescription = "下一页",
                 onClick = onNextPage,
-                enabled = pageButtonsEnabled &&
-                    state.hasNextPage &&
-                    !state.isLoading &&
-                    !state.isRefreshing &&
-                    !state.isLoadingMore,
+                enabled = pageButtonsEnabled && state.hasNextPage && !busy,
             )
+            NetDiskFloatingIconButton(
+                icon = Icons.Rounded.Download,
+                contentDescription = "加载全部",
+                onClick = onLoadAll,
+                enabled = !busy,
+            )
+            if (state.onlyVideos) {
+                NetDiskFloatingIconButton(
+                    icon = Icons.Rounded.Schedule,
+                    contentDescription = "按时长排序",
+                    onClick = onToggleDurationSort,
+                    enabled = !busy,
+                    contentColor = if (state.durationSortOrder != null) colors.accentText else Color.Unspecified,
+                )
+            }
         }
     }
 }
@@ -545,8 +621,10 @@ private fun NetDiskFloatingIconButton(
     contentDescription: String,
     onClick: () -> Unit,
     enabled: Boolean = true,
+    contentColor: Color = Color.Unspecified,
 ) {
     val colors = AppTheme.colors
+    val resolvedContentColor = if (contentColor == Color.Unspecified) colors.textPrimary else contentColor
     IconButton(
         onClick = onClick,
         enabled = enabled,
@@ -555,8 +633,39 @@ private fun NetDiskFloatingIconButton(
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
-            tint = if (enabled) colors.textPrimary else colors.textTertiary.copy(alpha = 0.45f),
+            tint = if (enabled) resolvedContentColor else colors.textTertiary.copy(alpha = 0.45f),
             modifier = Modifier.size(19.dp),
+        )
+    }
+}
+
+@Composable
+private fun NetDiskFloatingTextButton(
+    text: String,
+    contentDescription: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
+    val colors = AppTheme.colors
+    FilledTonalButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.size(width = 44.dp, height = 36.dp),
+        shape = RoundedCornerShape(10.dp),
+        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+        colors = ButtonDefaults.filledTonalButtonColors(
+            containerColor = Color.Transparent,
+            contentColor = colors.textPrimary,
+            disabledContainerColor = Color.Transparent,
+            disabledContentColor = colors.textTertiary.copy(alpha = 0.45f),
+        ),
+    ) {
+        Text(
+            text = text,
+            maxLines = 1,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = if (enabled) colors.textPrimary else colors.textTertiary.copy(alpha = 0.45f),
         )
     }
 }
