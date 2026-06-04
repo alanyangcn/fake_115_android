@@ -39,6 +39,7 @@ class PlayerActivity : ComponentActivity() {
         val fallbackPc = intent.getStringExtra(EXTRA_PC).orEmpty()
         val fallbackFavorite = intent.getBooleanExtra(EXTRA_IS_FAVORITE, false)
         val useNetDiskActions = intent.getBooleanExtra(EXTRA_USE_NET_DISK_ACTIONS, false)
+        val removeFromPlaylistOnFavorite = intent.getBooleanExtra(EXTRA_REMOVE_FROM_PLAYLIST_ON_FAVORITE, false)
         val initialPlaylist = readPlaylist(intent).ifEmpty {
             listOf(
                 PlayerPlaylistItem(
@@ -71,6 +72,7 @@ class PlayerActivity : ComponentActivity() {
                         initialUrl = "",
                         pc = currentItem.pc,
                         initialFavorite = currentItem.isFavorite,
+                        autoPlayNextAfterFavorite = useNetDiskActions && !removeFromPlaylistOnFavorite,
                         playlist = if (playlist.size <= 1) emptyList() else playlist,
                         currentPlaylistIndex = currentIndex,
                         onPlaylistItemSelected = { index ->
@@ -88,8 +90,22 @@ class PlayerActivity : ComponentActivity() {
                         updateFavorite = if (useNetDiskActions) {
                             { id, favorite ->
                                 val updated = netDiskRepository.updateStar(id, favorite)
-                                playlist = playlist.map { item ->
-                                    if (item.itemId == id) item.copy(isFavorite = updated) else item
+                                if (removeFromPlaylistOnFavorite && updated) {
+                                    val removedIndex = playlist.indexOfFirst { it.itemId == id }
+                                    if (removedIndex >= 0) {
+                                        val wasCurrent = removedIndex == currentIndex
+                                        playlist = playlist.filterNot { it.itemId == id }
+                                        currentIndex = when {
+                                            playlist.isEmpty() -> 0
+                                            wasCurrent -> removedIndex.coerceAtMost(playlist.lastIndex)
+                                            removedIndex < currentIndex -> currentIndex - 1
+                                            else -> currentIndex
+                                        }
+                                    }
+                                } else {
+                                    playlist = playlist.map { item ->
+                                        if (item.itemId == id) item.copy(isFavorite = updated) else item
+                                    }
                                 }
                                 updated
                             }
@@ -182,6 +198,7 @@ class PlayerActivity : ComponentActivity() {
         private const val EXTRA_PLAYLIST_DELETE_LABELS = "extra_playlist_delete_labels"
         private const val EXTRA_PLAYLIST_PCS = "extra_playlist_pcs"
         private const val EXTRA_PLAYLIST_FAVORITES = "extra_playlist_favorites"
+        private const val EXTRA_REMOVE_FROM_PLAYLIST_ON_FAVORITE = "extra_remove_from_playlist_on_favorite"
         private const val MAX_INTENT_PLAYLIST_ITEMS = 150
 
         fun createIntent(
@@ -233,6 +250,7 @@ class PlayerActivity : ComponentActivity() {
             pc: String,
             isFavorite: Boolean,
             playlist: List<NetDiskFile> = emptyList(),
+            removeFromPlaylistOnFavorite: Boolean = false,
         ): Intent {
             val safePlaylist = playlist.takeIntentWindow { it.id == fileId }
             return Intent(context, PlayerActivity::class.java).apply {
@@ -242,6 +260,7 @@ class PlayerActivity : ComponentActivity() {
                 putExtra(EXTRA_PC, pc)
                 putExtra(EXTRA_IS_FAVORITE, isFavorite)
                 putExtra(EXTRA_USE_NET_DISK_ACTIONS, true)
+                putExtra(EXTRA_REMOVE_FROM_PLAYLIST_ON_FAVORITE, removeFromPlaylistOnFavorite)
                 putStringArrayListExtra(
                     EXTRA_PLAYLIST_IDS,
                     ArrayList(safePlaylist.map { it.id }),

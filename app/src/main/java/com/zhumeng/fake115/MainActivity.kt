@@ -3,6 +3,7 @@ package com.zhumeng.fake115
 import android.os.Bundle
 import android.view.WindowManager
 import android.content.Context
+import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -28,18 +29,21 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -75,17 +79,23 @@ private const val TAB_NET_DISK = "网盘"
 private const val TAB_SETTINGS = "设置"
 private const val PLACEHOLDER_MOVIE = "搜索标题或番号"
 private const val PLACEHOLDER_ACTRESS = "搜索演员"
+private const val PLACEHOLDER_NET_DISK = "搜索网盘文件"
 private const val LABEL_SEARCH = "搜索"
 
 class MainActivity : ComponentActivity() {
+    private val targetNetDiskCid = mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
+        targetNetDiskCid.value = intent.getStringExtra(EXTRA_NET_DISK_CID)
         setContent {
             Fake115Theme {
                 MainScreen(
+                    targetNetDiskCid = targetNetDiskCid.value,
+                    onNetDiskTargetConsumed = { targetNetDiskCid.value = null },
                     onOpenPlayer = { movie, playlist ->
                         startActivity(
                             PlayerActivity.createIntent(
@@ -114,6 +124,26 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        targetNetDiskCid.value = intent.getStringExtra(EXTRA_NET_DISK_CID)
+    }
+
+    companion object {
+        private const val EXTRA_NET_DISK_CID = "extra_net_disk_cid"
+
+        fun createNetDiskIntent(
+            context: Context,
+            cid: String,
+        ): Intent {
+            return Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra(EXTRA_NET_DISK_CID, cid.ifBlank { "0" })
+            }
+        }
+    }
 }
 
 private enum class MainTab {
@@ -128,6 +158,8 @@ private const val KEY_SELECTED_TAB = "selected_tab"
 
 @Composable
 private fun MainScreen(
+    targetNetDiskCid: String?,
+    onNetDiskTargetConsumed: () -> Unit,
     onOpenPlayer: (LibraryMovie, List<LibraryMovie>) -> Unit,
     onOpenDetail: (LibraryMovie) -> Unit,
 ) {
@@ -149,7 +181,19 @@ private fun MainScreen(
     val settingsViewModel: SettingsViewModel = viewModel()
     val uiState by libraryViewModel.uiState.collectAsState()
     val actressState by actressViewModel.uiState.collectAsState()
+    val netDiskState by netDiskViewModel.uiState.collectAsState()
     val actressGridState = rememberLazyStaggeredGridState()
+    var settingsTitle by rememberSaveable { mutableStateOf(TAB_SETTINGS) }
+    var settingsCanNavigateBack by rememberSaveable { mutableStateOf(false) }
+    var settingsBackRequestToken by rememberSaveable { mutableStateOf(0) }
+
+    LaunchedEffect(targetNetDiskCid) {
+        val cid = targetNetDiskCid ?: return@LaunchedEffect
+        selectedTab = MainTab.NetDisk
+        mainPrefs.edit().putString(KEY_SELECTED_TAB, MainTab.NetDisk.name).apply()
+        netDiskViewModel.openPath(cid)
+        onNetDiskTargetConsumed()
+    }
 
     Scaffold(
         containerColor = colors.appBackground,
@@ -165,8 +209,19 @@ private fun MainScreen(
                     onValueChange = actressViewModel::onSearchInputChanged,
                     placeholder = PLACEHOLDER_ACTRESS,
                 )
-                MainTab.NetDisk -> SimpleTopBar(title = TAB_NET_DISK)
-                MainTab.Settings -> SimpleTopBar(title = TAB_SETTINGS)
+                MainTab.NetDisk -> HomeSearchBar(
+                    value = netDiskState.searchInput,
+                    onValueChange = netDiskViewModel::onSearchInputChanged,
+                    placeholder = PLACEHOLDER_NET_DISK,
+                )
+                MainTab.Settings -> SimpleTopBar(
+                    title = settingsTitle,
+                    onBack = if (settingsCanNavigateBack) {
+                        { settingsBackRequestToken += 1 }
+                    } else {
+                        null
+                    },
+                )
             }
         },
         bottomBar = {
@@ -252,6 +307,9 @@ private fun MainScreen(
             MainTab.Settings -> SettingsScreen(
                 contentPadding = screenPadding,
                 viewModel = settingsViewModel,
+                onTitleChanged = { settingsTitle = it },
+                onCanNavigateBackChanged = { settingsCanNavigateBack = it },
+                backRequestToken = settingsBackRequestToken,
             )
         }
     }
@@ -359,17 +417,37 @@ private fun HomeSearchBar(
 }
 
 @Composable
-private fun SimpleTopBar(title: String) {
+private fun SimpleTopBar(
+    title: String,
+    onBack: (() -> Unit)? = null,
+) {
     val colors = AppTheme.colors
-    Row(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .background(colors.topBar)
             .windowInsetsPadding(WindowInsets.statusBars)
             .padding(horizontal = 16.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text = title, color = colors.textPrimary)
+        if (onBack != null) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .size(36.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                    contentDescription = "返回",
+                    tint = colors.textPrimary,
+                )
+            }
+        }
+        Text(
+            text = title,
+            modifier = Modifier.align(Alignment.Center),
+            color = colors.textPrimary,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }

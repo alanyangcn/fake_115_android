@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.zhumeng.fake115.data.ApiConfig
+import com.zhumeng.fake115.data.AppSettings
 import com.zhumeng.fake115.data.CookieStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +24,7 @@ data class SettingsUiState(
     val isFetching: Boolean = false,
     val message: String? = null,
     val hasSavedCookie: Boolean = false,
+    val quickManagementEnabled: Boolean = false,
 )
 
 class SettingsViewModel(
@@ -31,6 +33,8 @@ class SettingsViewModel(
     private val _uiState = MutableStateFlow(
         SettingsUiState().copyFromSavedCookie(
             CookieStore.getCookie(application)
+        ).copy(
+            quickManagementEnabled = AppSettings.isQuickManagementEnabled(application),
         )
     )
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
@@ -57,6 +61,13 @@ class SettingsViewModel(
                     "Cookie 已保存到本地。"
                 },
             )
+        }
+    }
+
+    fun setQuickManagementEnabled(enabled: Boolean) {
+        AppSettings.setQuickManagementEnabled(getApplication(), enabled)
+        _uiState.update {
+            it.copy(quickManagementEnabled = enabled)
         }
     }
 

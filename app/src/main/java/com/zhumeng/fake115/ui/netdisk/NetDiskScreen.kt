@@ -49,11 +49,13 @@ import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.InsertDriveFile
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.SortByAlpha
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.SwapVert
+import androidx.compose.material.icons.rounded.Upload
 import androidx.compose.material.icons.rounded.ViewAgenda
 import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material.pullrefresh.PullRefreshIndicator
@@ -78,6 +80,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -97,11 +100,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.zhumeng.fake115.NetDiskDetailActivity
 import com.zhumeng.fake115.PlayerActivity
+import com.zhumeng.fake115.data.AppSettings
 import com.zhumeng.fake115.data.model.FavoriteFilterMode
 import com.zhumeng.fake115.data.model.NetDiskFile
 import com.zhumeng.fake115.data.model.NetDiskPathNode
 import com.zhumeng.fake115.ui.common.DeleteConfirmDialog
 import com.zhumeng.fake115.ui.theme.AppTheme
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.time.ZoneId
@@ -130,10 +135,12 @@ fun NetDiskScreen(
     val listState = rememberLazyListState()
     val gridState = rememberLazyStaggeredGridState()
     val context = LocalContext.current
+    val quickManagementEnabled by AppSettings.quickManagementEnabledFlow(context).collectAsState()
     var activeToast by remember { mutableStateOf<Toast?>(null) }
     var lastPageButtonClickAt by remember { mutableLongStateOf(0L) }
     var pageButtonLocked by remember { mutableStateOf(false) }
     var pendingDeleteFile by remember { mutableStateOf<NetDiskFile?>(null) }
+    val scrollScope = rememberCoroutineScope()
     val pullRefreshState = rememberPullRefreshState(
         refreshing = state.isRefreshing,
         onRefresh = viewModel::refresh,
@@ -205,6 +212,28 @@ fun NetDiskScreen(
         }
     }
 
+    fun scrollToTop() {
+        scrollScope.launch {
+            if (state.viewMode == NetDiskViewMode.List) {
+                listState.scrollToItem(0)
+            } else {
+                gridState.scrollToItem(0)
+            }
+        }
+    }
+
+    fun scrollToBottom() {
+        if (state.files.isEmpty()) return
+        scrollScope.launch {
+            val lastIndex = state.files.lastIndex
+            if (state.viewMode == NetDiskViewMode.List) {
+                listState.scrollToItem(lastIndex)
+            } else {
+                gridState.scrollToItem(lastIndex)
+            }
+        }
+    }
+
     fun openFile(file: NetDiskFile) {
         if (file.isVideo && !file.pc.isNullOrBlank()) {
             val playlist = state.files.filter {
@@ -218,6 +247,7 @@ fun NetDiskScreen(
                 pc = file.pc,
                 isFavorite = file.isStarred,
                 playlist = playlist,
+                removeFromPlaylistOnFavorite = state.favoriteFilter == FavoriteFilterMode.Unfavorite,
             )
             runCatching {
                 context.startActivity(playerIntent)
@@ -230,6 +260,7 @@ fun NetDiskScreen(
                         deleteLabel = file.n,
                         pc = file.pc,
                         isFavorite = file.isStarred,
+                        removeFromPlaylistOnFavorite = state.favoriteFilter == FavoriteFilterMode.Unfavorite,
                     )
                 )
             }
@@ -244,6 +275,7 @@ fun NetDiskScreen(
                 context = context,
                 id = file.id,
                 title = file.n,
+                isDirectory = file.isDirectory,
             )
         )
     }
@@ -353,7 +385,13 @@ fun NetDiskScreen(
                                         deleting = file.id in state.deletingIds,
                                         onOpen = { openFile(file) },
                                         onToggleFavorite = { viewModel.toggleFileStar(file.id) },
-                                        onDelete = { pendingDeleteFile = file },
+                                        onDelete = {
+                                            if (quickManagementEnabled) {
+                                                viewModel.deleteFile(file.id)
+                                            } else {
+                                                pendingDeleteFile = file
+                                            }
+                                        },
                                         onOpenDetail = { openDetail(file) },
                                     )
                                 }
@@ -376,16 +414,6 @@ fun NetDiskScreen(
             }
         }
 
-        NetDiskVideoTotalBadge(
-            total = state.files.count { it.isVideo },
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(
-                    end = 14.dp,
-                    bottom = contentPadding.calculateBottomPadding() + 18.dp,
-                ),
-        )
-
         NetDiskPagerFloatingControls(
             state = state,
             pageButtonsEnabled = !pageButtonLocked,
@@ -393,12 +421,13 @@ fun NetDiskScreen(
             onGoToPage = { page -> handlePagedAction { viewModel.goToPage(page) } },
             onNextPage = { handlePagedAction(viewModel::nextPage) },
             onLoadAll = viewModel::loadAllFiles,
+            onScrollToTop = ::scrollToTop,
+            onScrollToBottom = ::scrollToBottom,
             onToggleDurationSort = viewModel::toggleDurationSort,
             modifier = Modifier
-                .align(Alignment.BottomStart)
+                .align(Alignment.BottomCenter)
                 .padding(
-                    start = 14.dp,
-                    bottom = contentPadding.calculateBottomPadding() + 18.dp,
+                    bottom = contentPadding.calculateBottomPadding() + 8.dp,
                 ),
         )
 
@@ -531,6 +560,8 @@ private fun NetDiskPagerFloatingControls(
     onGoToPage: (Int) -> Unit,
     onNextPage: () -> Unit,
     onLoadAll: () -> Unit,
+    onScrollToTop: () -> Unit,
+    onScrollToBottom: () -> Unit,
     onToggleDurationSort: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -541,7 +572,7 @@ private fun NetDiskPagerFloatingControls(
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(14.dp),
-        color = colors.surfaceOverlay,
+        color = colors.surfaceOverlay.copy(alpha = 0.94f),
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
@@ -598,20 +629,43 @@ private fun NetDiskPagerFloatingControls(
                 enabled = pageButtonsEnabled && state.hasNextPage && !busy,
             )
             NetDiskFloatingIconButton(
-                icon = Icons.Rounded.Download,
+                icon = Icons.Rounded.PlaylistAdd,
                 contentDescription = "加载全部",
                 onClick = onLoadAll,
                 enabled = !busy,
             )
+            NetDiskFloatingIconButton(
+                icon = Icons.Rounded.Upload,
+                contentDescription = "返回顶部",
+                onClick = onScrollToTop,
+                enabled = state.files.isNotEmpty(),
+            )
+            NetDiskFloatingIconButton(
+                icon = Icons.Rounded.Download,
+                contentDescription = "返回底部",
+                onClick = onScrollToBottom,
+                enabled = state.files.isNotEmpty(),
+            )
             if (state.onlyVideos) {
+                val durationSortContentColor = when (state.durationSortOrder) {
+                    NetDiskDurationSortOrder.Asc -> Color(0xFF7EE0B5)
+                    NetDiskDurationSortOrder.Desc -> Color(0xFFFFC857)
+                    null -> colors.textTertiary
+                }
+                val durationSortDescription = when (state.durationSortOrder) {
+                    NetDiskDurationSortOrder.Asc -> "按时长正序"
+                    NetDiskDurationSortOrder.Desc -> "按时长倒序"
+                    null -> "不按时长排序"
+                }
                 NetDiskFloatingIconButton(
                     icon = Icons.Rounded.Schedule,
-                    contentDescription = "按时长排序",
+                    contentDescription = durationSortDescription,
                     onClick = onToggleDurationSort,
                     enabled = !busy,
-                    contentColor = if (state.durationSortOrder != null) colors.accentText else Color.Unspecified,
+                    contentColor = durationSortContentColor,
                 )
             }
+            NetDiskFloatingTextBadge(text = "共 ${state.files.count { it.isVideo }}")
         }
     }
 }
@@ -669,6 +723,23 @@ private fun NetDiskFloatingTextButton(
         )
     }
 }
+
+@Composable
+private fun NetDiskFloatingTextBadge(
+    text: String,
+) {
+    val colors = AppTheme.colors
+    Text(
+        text = text,
+        modifier = Modifier.padding(start = 4.dp, end = 8.dp),
+        color = colors.textPrimary,
+        style = MaterialTheme.typography.labelSmall,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Normal,
+        maxLines = 1,
+    )
+}
+
 @Composable
 private fun NetDiskVideoTotalBadge(
     total: Int,

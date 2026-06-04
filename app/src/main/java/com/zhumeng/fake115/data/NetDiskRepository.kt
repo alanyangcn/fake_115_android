@@ -4,6 +4,9 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import com.zhumeng.fake115.data.model.NetDiskFile
+import com.zhumeng.fake115.data.model.NetDiskDetailPathNode
+import com.zhumeng.fake115.data.model.NetDiskFileDetail
+import com.zhumeng.fake115.data.model.NetDiskFileLabel
 import com.zhumeng.fake115.data.model.NetDiskPathNode
 import com.zhumeng.fake115.data.model.NetDiskQuery
 import com.zhumeng.fake115.data.model.NetDiskResponse
@@ -43,6 +46,24 @@ class NetDiskRepository(
             cid = json.opt("cid")?.toString().orEmpty(),
             path = parsePath(json.optJSONArray("path")),
         )
+    }
+
+    suspend fun fetchFileDetail(
+        id: String,
+        isDirectory: Boolean,
+    ): NetDiskFileDetail = withContext(Dispatchers.IO) {
+        val uri = Uri.parse("https://webapi.115.com/category/get")
+            .buildUpon()
+            .appendQueryParameter(if (isDirectory) "cid" else "fid", id)
+            .appendQueryParameter("status", "1")
+            .build()
+        val json = requestJson(uri)
+
+        if (!json.optBoolean("state", false)) {
+            throw IllegalStateException(json.optString("error").ifBlank { NET_DISK_LOAD_ERROR })
+        }
+
+        parseFileDetail(json, id, isDirectory)
     }
 
     suspend fun updateStar(
@@ -191,6 +212,74 @@ class NetDiskRepository(
                         cid = row.opt("cid")?.toString().orEmpty(),
                         pid = row.opt("pid")?.toString(),
                         name = row.optString("name").ifBlank { DEFAULT_FOLDER_NAME },
+                    )
+                )
+            }
+        }
+    }
+
+    private fun parseFileDetail(
+        json: JSONObject,
+        id: String,
+        isDirectory: Boolean,
+    ): NetDiskFileDetail {
+        return NetDiskFileDetail(
+            id = id,
+            isDirectory = isDirectory,
+            fileName = json.optMeaningfulString("file_name") ?: DEFAULT_FOLDER_NAME,
+            pickCode = json.optMeaningfulString("pick_code").orEmpty(),
+            sha1 = json.optMeaningfulString("sha1").orEmpty(),
+            size = json.opt("size")?.toString().orEmpty(),
+            count = json.opt("count")?.toString().orEmpty(),
+            folderCount = json.opt("folder_count")?.toString().orEmpty(),
+            playLongSeconds = json.optLong("play_long"),
+            showPlayLongSeconds = json.optLong("show_play_long"),
+            createTime = json.optEpoch("ctime"),
+            updateTime = json.optEpoch("utime"),
+            uploadTime = json.optEpoch("ptime"),
+            openTime = json.optEpoch("open_time"),
+            isShare = json.opt("is_share")?.toString() == "1",
+            isPrivate = json.optInt("is_private") == 1,
+            isMarked = json.opt("is_mark")?.toString() == "1",
+            score = json.opt("score")?.toString().orEmpty(),
+            desc = json.optMeaningfulString("desc").orEmpty(),
+            fileCategory = json.opt("file_category")?.toString().orEmpty(),
+            labels = parseFileLabels(json.optJSONArray("fl")),
+            paths = parseDetailPath(json.optJSONArray("paths")),
+        )
+    }
+
+    private fun parseFileLabels(rows: JSONArray?): List<NetDiskFileLabel> {
+        if (rows == null) return emptyList()
+
+        return buildList {
+            for (index in 0 until rows.length()) {
+                val row = rows.optJSONObject(index) ?: continue
+                val name = row.optMeaningfulString("name") ?: continue
+                add(
+                    NetDiskFileLabel(
+                        id = row.opt("id")?.toString().orEmpty(),
+                        name = name,
+                        sort = row.opt("sort")?.toString().orEmpty(),
+                        color = row.optMeaningfulString("color").orEmpty(),
+                        updateTime = row.optEpoch("update_time"),
+                        createTime = row.optEpoch("create_time"),
+                    )
+                )
+            }
+        }
+    }
+
+    private fun parseDetailPath(rows: JSONArray?): List<NetDiskDetailPathNode> {
+        if (rows == null) return emptyList()
+
+        return buildList {
+            for (index in 0 until rows.length()) {
+                val row = rows.optJSONObject(index) ?: continue
+                add(
+                    NetDiskDetailPathNode(
+                        fileId = row.opt("file_id")?.toString().orEmpty(),
+                        fileName = row.optString("file_name").ifBlank { DEFAULT_FOLDER_NAME },
                     )
                 )
             }

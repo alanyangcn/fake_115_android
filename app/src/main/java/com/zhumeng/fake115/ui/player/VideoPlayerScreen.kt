@@ -75,6 +75,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -116,6 +117,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.zhumeng.fake115.data.AppSettings
 import com.zhumeng.fake115.ui.common.DeleteConfirmDialog
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -145,6 +147,7 @@ fun VideoPlayerScreen(
     resolveUrl: (suspend (String) -> String)? = null,
     updateFavorite: (suspend (String, Boolean) -> Boolean)? = null,
     deleteVideo: (suspend (String) -> String)? = null,
+    autoPlayNextAfterFavorite: Boolean = false,
     playlist: List<PlayerPlaylistItem> = emptyList(),
     currentPlaylistIndex: Int = -1,
     onPlaylistItemSelected: (Int) -> Unit = {},
@@ -218,12 +221,38 @@ fun VideoPlayerScreen(
                 runCatching { updateFavorite(itemId, !isFavorite) }
                     .onSuccess { favorite ->
                         isFavorite = favorite
+                        if (
+                            autoPlayNextAfterFavorite &&
+                            currentPlaylistIndex in playlist.indices &&
+                            currentPlaylistIndex < playlist.lastIndex
+                        ) {
+                            onPlaylistItemSelected(currentPlaylistIndex + 1)
+                        }
                     }
                     .onFailure { error ->
                         errorMessage = error.message ?: "Failed to update favorite."
                     }
                 isFavoriteUpdating = false
             }
+        }
+    }
+
+    fun favoritePlaylistItemAndPlayNext(index: Int) {
+        val item = playlist.getOrNull(index) ?: return
+        if (updateFavorite == null || item.itemId.isBlank()) return
+        scope.launch {
+            runCatching { updateFavorite(item.itemId, !item.isFavorite) }
+                .onSuccess { favorite ->
+                    if (item.itemId == itemId) {
+                        isFavorite = favorite
+                    }
+                    if (autoPlayNextAfterFavorite && index < playlist.lastIndex) {
+                        onPlaylistItemSelected(index + 1)
+                    }
+                }
+                .onFailure { error ->
+                    errorMessage = error.message ?: "Failed to update favorite."
+                }
         }
     }
 
@@ -248,55 +277,11 @@ fun VideoPlayerScreen(
         modifier = Modifier.fillMaxSize(),
         color = Color.Black
     ) {
-        when {
-            isResolving -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator()
-                }
-            }
-
-            errorMessage != null -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Text(text = errorMessage ?: "Playback failed.", color = Color.White)
-                        Button(
-                            onClick = {
-                                if (pc.isBlank() || resolveUrl == null) return@Button
-                                scope.launch {
-                                    isResolving = true
-                                    errorMessage = null
-                                    runCatching { resolveUrl(pc) }
-                                        .onSuccess { url ->
-                                            resolvedUrl = url
-                                            isResolving = false
-                                        }
-                                        .onFailure { error ->
-                                            resolvedUrl = ""
-                                            isResolving = false
-                                            errorMessage = error.message ?: "Failed to resolve playback url."
-                                        }
-                                }
-                            }
-                        ) {
-                            Text("Retry")
-                        }
-                    }
-                }
-            }
-
-            else -> {
-                exoPlayer?.let {
+        Box(modifier = Modifier.fillMaxSize()) {
+            when {
+                exoPlayer != null -> {
                     EmbeddedVideoPlayer(
-                        exoPlayer = it,
+                        exoPlayer = exoPlayer,
                         modifier = Modifier.fillMaxSize(),
                         isFullScreen = true,
                         onToggleFullScreen = {},
@@ -309,6 +294,7 @@ fun VideoPlayerScreen(
                         playlist = playlist,
                         currentPlaylistIndex = currentPlaylistIndex,
                         onPlaylistItemSelected = onPlaylistItemSelected,
+                        onPlaylistFavoriteSelected = ::favoritePlaylistItemAndPlayNext,
                         onPlaybackEnded = onPlaybackEnded,
                         deleteLabel = deleteLabel,
                         title = title.ifBlank { "Video" },
@@ -319,8 +305,193 @@ fun VideoPlayerScreen(
                         forceFullScreen = true,
                     )
                 }
+
+                else -> {
+                    PlayerUnavailableShell(
+                        title = title.ifBlank { "Video" },
+                        isFavorite = isFavorite,
+                        favoriteEnabled = !isFavoriteUpdating && updateFavorite != null && itemId.isNotBlank(),
+                        deleteEnabled = !isDeleting && deleteVideo != null && itemId.isNotBlank(),
+                        deleteInProgress = isDeleting,
+                        onToggleFavorite = handleToggleFavorite,
+                        onDelete = handleDelete,
+                        playlist = playlist,
+                        currentPlaylistIndex = currentPlaylistIndex,
+                        onPlaylistItemSelected = onPlaylistItemSelected,
+                        onPlaylistFavoriteSelected = ::favoritePlaylistItemAndPlayNext,
+                        deleteLabel = deleteLabel,
+                        onBack = onBack,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+
+            if (isResolving) {
+                Box(
+                    modifier = Modifier.align(Alignment.Center),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
+            }
+
+            errorMessage?.let { message ->
+                PlaybackErrorMessage(
+                    message = message,
+                    modifier = Modifier.align(Alignment.Center),
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun PlayerUnavailableShell(
+    title: String,
+    isFavorite: Boolean,
+    favoriteEnabled: Boolean,
+    deleteEnabled: Boolean,
+    deleteInProgress: Boolean,
+    onToggleFavorite: () -> Unit,
+    onDelete: () -> Unit,
+    playlist: List<PlayerPlaylistItem>,
+    currentPlaylistIndex: Int,
+    onPlaylistItemSelected: (Int) -> Unit,
+    onPlaylistFavoriteSelected: (Int) -> Unit,
+    deleteLabel: String,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val configuration = LocalConfiguration.current
+    val context = LocalContext.current
+    val quickManagementEnabled by AppSettings.quickManagementEnabledFlow(context).collectAsState()
+    val activity = context.findActivity()
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var showPlaylistDialog by remember { mutableStateOf(false) }
+    var resizeMode by rememberSaveable { mutableStateOf(VideoResizeMode.Fit) }
+    var playbackSpeed by rememberSaveable { mutableFloatStateOf(1f) }
+    var batteryLevel by remember { mutableStateOf(readBatteryLevel(context)) }
+    var currentTime by remember { mutableStateOf(currentTimeText()) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            currentTime = currentTimeText()
+            batteryLevel = readBatteryLevel(context)
+            delay(1000)
+        }
+    }
+
+    Box(
+        modifier = modifier.background(Color.Black)
+    ) {
+        PlayerChromeScrims(modifier = Modifier.fillMaxSize())
+
+        PlayerTopOverlay(
+            title = title,
+            currentTime = currentTime,
+            batteryLevel = batteryLevel,
+            resizeMode = resizeMode,
+            isFavorite = isFavorite,
+            favoriteEnabled = favoriteEnabled,
+            deleteEnabled = deleteEnabled,
+            showPlaylistButton = playlist.isNotEmpty(),
+            onBack = onBack,
+            onOpenPlaylist = { showPlaylistDialog = true },
+            onCycleResizeMode = { resizeMode = resizeMode.next() },
+            onToggleFavorite = onToggleFavorite,
+            onDelete = {
+                if (quickManagementEnabled) {
+                    onDelete()
+                } else {
+                    showDeleteDialog = true
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .padding(horizontal = 8.dp, vertical = 8.dp)
+        )
+
+        VideoControlsOverlay(
+            isPlaying = false,
+            positionMs = 0L,
+            durationMs = 0L,
+            onPlayPause = {},
+            canPlayPrevious = currentPlaylistIndex > 0 && playlist.isNotEmpty(),
+            onPlayPrevious = { onPlaylistItemSelected(currentPlaylistIndex - 1) },
+            canPlayNext = currentPlaylistIndex >= 0 &&
+                currentPlaylistIndex < playlist.lastIndex &&
+                playlist.isNotEmpty(),
+            onPlayNext = { onPlaylistItemSelected(currentPlaylistIndex + 1) },
+            onSeekChange = {},
+            onSeekEnd = {},
+            playbackSpeed = playbackSpeed,
+            onPlaybackSpeedSelected = { playbackSpeed = it },
+            onToggleOrientation = {
+                activity?.requestedOrientation =
+                    if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+                        ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
+                    } else {
+                        ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
+                    }
+            },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        )
+    }
+
+    if (showPlaylistDialog) {
+        PlaylistDialog(
+            playlist = playlist,
+            currentIndex = currentPlaylistIndex,
+            onDismiss = { showPlaylistDialog = false },
+            onItemSelected = { index ->
+                showPlaylistDialog = false
+                onPlaylistItemSelected(index)
+            },
+            onFavoriteSelected = { index ->
+                showPlaylistDialog = false
+                onPlaylistFavoriteSelected(index)
+            },
+        )
+    }
+
+    if (showDeleteDialog) {
+        DeleteConfirmDialog(
+            message = "确定要删除《${title.ifBlank { deleteLabel.ifBlank { "当前影片" } }}》吗？",
+            deleting = deleteInProgress,
+            onDismiss = {
+                if (!deleteInProgress) showDeleteDialog = false
+            },
+            onConfirm = {
+                showDeleteDialog = false
+                onDelete()
+            },
+            confirmEnabled = deleteEnabled,
+        )
+    }
+}
+
+@Composable
+private fun PlaybackErrorMessage(
+    message: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.padding(horizontal = 24.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xB3000000),
+    ) {
+        Text(
+            text = message.ifBlank { "播放地址解析失败" },
+            color = Color.White,
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+        )
     }
 }
 
@@ -339,6 +510,7 @@ fun EmbeddedVideoPlayer(
     playlist: List<PlayerPlaylistItem> = emptyList(),
     currentPlaylistIndex: Int = -1,
     onPlaylistItemSelected: (Int) -> Unit = {},
+    onPlaylistFavoriteSelected: (Int) -> Unit = {},
     onPlaybackEnded: () -> Unit = {},
     title: String = "",
     deleteLabel: String = "",
@@ -365,6 +537,7 @@ fun EmbeddedVideoPlayer(
                     playlist = playlist,
                     currentPlaylistIndex = currentPlaylistIndex,
                     onPlaylistItemSelected = onPlaylistItemSelected,
+                    onPlaylistFavoriteSelected = onPlaylistFavoriteSelected,
                     onPlaybackEnded = onPlaybackEnded,
                     title = title,
                     deleteLabel = deleteLabel,
@@ -395,6 +568,7 @@ fun EmbeddedVideoPlayer(
                             playlist = playlist,
                             currentPlaylistIndex = currentPlaylistIndex,
                             onPlaylistItemSelected = onPlaylistItemSelected,
+                            onPlaylistFavoriteSelected = onPlaylistFavoriteSelected,
                             onPlaybackEnded = onPlaybackEnded,
                             title = title,
                             deleteLabel = deleteLabel,
@@ -430,6 +604,7 @@ fun EmbeddedVideoPlayer(
                     playlist = playlist,
                     currentPlaylistIndex = currentPlaylistIndex,
                     onPlaylistItemSelected = onPlaylistItemSelected,
+                    onPlaylistFavoriteSelected = onPlaylistFavoriteSelected,
                     onPlaybackEnded = onPlaybackEnded,
                     title = title,
                     deleteLabel = deleteLabel,
@@ -519,6 +694,7 @@ private fun PlayerContainer(
     playlist: List<PlayerPlaylistItem>,
     currentPlaylistIndex: Int,
     onPlaylistItemSelected: (Int) -> Unit,
+    onPlaylistFavoriteSelected: (Int) -> Unit,
     onPlaybackEnded: () -> Unit,
     title: String,
     deleteLabel: String,
@@ -529,6 +705,7 @@ private fun PlayerContainer(
 ) {
     val configuration = LocalConfiguration.current
     val context = LocalContext.current
+    val quickManagementEnabled by AppSettings.quickManagementEnabledFlow(context).collectAsState()
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val activity = context.findActivity()
@@ -927,7 +1104,11 @@ private fun PlayerContainer(
                 },
                 onDelete = {
                     markControlsInteraction()
-                    showDeleteDialog = true
+                    if (quickManagementEnabled) {
+                        onDelete()
+                    } else {
+                        showDeleteDialog = true
+                    }
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1091,6 +1272,10 @@ private fun PlayerContainer(
             onItemSelected = { index ->
                 showPlaylistDialog = false
                 onPlaylistItemSelected(index)
+            },
+            onFavoriteSelected = { index ->
+                showPlaylistDialog = false
+                onPlaylistFavoriteSelected(index)
             },
         )
     }
@@ -1371,6 +1556,7 @@ private fun PlaylistDialog(
     currentIndex: Int,
     onDismiss: () -> Unit,
     onItemSelected: (Int) -> Unit,
+    onFavoriteSelected: (Int) -> Unit,
 ) {
     Dialog(
         onDismissRequest = onDismiss,
@@ -1408,7 +1594,7 @@ private fun PlaylistDialog(
                 ) {
                     itemsIndexed(playlist) { index, item ->
                         val selected = index == currentIndex
-                        Column(
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { onItemSelected(index) }
@@ -1416,15 +1602,32 @@ private fun PlaylistDialog(
                                     if (selected) Color.White.copy(alpha = 0.14f) else Color.Transparent
                                 )
                                 .padding(horizontal = 16.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
                                 text = item.title.ifBlank { item.deleteLabel },
+                                modifier = Modifier.weight(1f),
                                 color = Color.White,
                                 style = MaterialTheme.typography.labelLarge,
                                 fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
+                            IconButton(
+                                onClick = { onFavoriteSelected(index) },
+                                modifier = Modifier.size(34.dp),
+                            ) {
+                                Icon(
+                                    imageVector = if (item.isFavorite) {
+                                        Icons.Rounded.Favorite
+                                    } else {
+                                        Icons.Rounded.FavoriteBorder
+                                    },
+                                    contentDescription = if (item.isFavorite) "取消收藏" else "收藏",
+                                    tint = if (item.isFavorite) Color(0xFFFF6B8A) else Color.White,
+                                )
+                            }
                         }
                     }
                 }

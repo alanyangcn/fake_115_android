@@ -79,6 +79,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.zhumeng.fake115.data.AppSettings
 import com.zhumeng.fake115.data.model.FavoriteFilterMode
 import com.zhumeng.fake115.data.model.LibraryMovie
 import com.zhumeng.fake115.data.model.SortOption
@@ -98,6 +99,7 @@ fun LibraryScreen(
     val colors = AppTheme.colors
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+    val quickManagementEnabled by AppSettings.quickManagementEnabledFlow(context).collectAsState()
     val gridState = rememberLazyGridState()
     val pullRefreshState = rememberPullRefreshState(
         refreshing = state.isRefreshing,
@@ -177,7 +179,13 @@ fun LibraryScreen(
                             onOpenDetail = { onOpenDetail(movie) },
                             onPlay = { onOpenPlayer(movie, state.movies) },
                             onFavorite = { viewModel.toggleFavorite(movie.id) },
-                            onDelete = { pendingDeleteMovie = movie },
+                            onDelete = {
+                                if (quickManagementEnabled) {
+                                    viewModel.deleteMovie(movie.id)
+                                } else {
+                                    pendingDeleteMovie = movie
+                                }
+                            },
                             favoriteEnabled = movie.id !in state.favoriteUpdatingIds,
                             deleteEnabled = movie.id !in state.deletingIds,
                         )
@@ -698,6 +706,7 @@ private fun MovieCard(
     deleteEnabled: Boolean,
 ) {
     val colors = AppTheme.colors
+    val fanhaoTextColor = Color(0xFFE0E7FF)
     val compact = viewMode == ViewMode.Compact
 
     Card(
@@ -737,7 +746,7 @@ private fun MovieCard(
                             .clip(RoundedCornerShape(0.dp, 8.dp, 0.dp, 0.dp))
                             .background(colors.accent.copy(alpha = 0.75f))
                             .padding(horizontal = 8.dp, vertical = 4.dp),
-                        color = colors.textPrimary,
+                        color = fanhaoTextColor,
                         fontSize = 10.sp,
                         lineHeight = 10.sp,
                         fontWeight = FontWeight.Medium,
@@ -751,7 +760,7 @@ private fun MovieCard(
                             .clip(RoundedCornerShape(999.dp))
                             .background(colors.accent)
                             .padding(horizontal = 10.dp, vertical = 5.dp),
-                        color = colors.textPrimary,
+                        color = fanhaoTextColor,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                     )

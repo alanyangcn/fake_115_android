@@ -14,7 +14,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
 import kotlin.math.ceil
 
 private const val LOAD_ERROR = "加载网盘文件失败。"
@@ -52,6 +56,7 @@ data class NetDiskUiState(
     val errorMessage: String? = null,
     val rawFiles: List<NetDiskFile> = emptyList(),
     val files: List<NetDiskFile> = emptyList(),
+    val searchInput: String = "",
     val contentResetVersion: Int = 0,
     val count: Int = 0,
     val offset: Int = 0,
@@ -66,6 +71,7 @@ data class NetDiskUiState(
     val viewMode: NetDiskViewMode = NetDiskViewMode.List,
     val starUpdatingIds: Set<String> = emptySet(),
     val deletingIds: Set<String> = emptySet(),
+    val restoredFromCache: Boolean = false,
 ) {
     val hasMore: Boolean
         get() = rawFiles.size + offset < count
@@ -88,19 +94,22 @@ class NetDiskViewModel(
 ) : AndroidViewModel(application) {
     private val repository = NetDiskRepository(application)
     private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val cacheFile = File(application.filesDir, CACHE_FILE_NAME)
     private val _uiState = MutableStateFlow(loadSavedFilters())
     val uiState: StateFlow<NetDiskUiState> = _uiState.asStateFlow()
 
     init {
         observeRepositoryEvents()
         val current = _uiState.value
-        loadFiles(
-            cid = current.currentCid,
-            offset = 0,
-            isRefreshing = false,
-            append = false,
-            onlyVideos = current.onlyVideos,
-        )
+        if (!current.restoredFromCache) {
+            loadFiles(
+                cid = current.currentCid,
+                offset = 0,
+                isRefreshing = false,
+                append = false,
+                onlyVideos = current.onlyVideos,
+            )
+        }
     }
 
     private fun observeRepositoryEvents() {
@@ -123,9 +132,9 @@ class NetDiskViewModel(
             }
             state.copy(
                 rawFiles = rawFiles,
-                files = rawFiles.toDisplayedFiles(state.favoriteFilter, state.durationSortOrder),
+                files = rawFiles.toDisplayedFiles(state.favoriteFilter, state.durationSortOrder, state.searchInput),
             )
-        }
+        }.also { saveContentCacheAsync() }
     }
 
     private fun removeFileLocally(fileId: String) {
@@ -134,10 +143,10 @@ class NetDiskViewModel(
             val rawFiles = state.rawFiles.filterNot { it.id == fileId }
             state.copy(
                 rawFiles = rawFiles,
-                files = rawFiles.toDisplayedFiles(state.favoriteFilter, state.durationSortOrder),
+                files = rawFiles.toDisplayedFiles(state.favoriteFilter, state.durationSortOrder, state.searchInput),
                 count = if (existed) (state.count - 1).coerceAtLeast(0) else state.count,
             )
-        }
+        }.also { saveContentCacheAsync() }
     }
 
     fun refresh() {
@@ -217,10 +226,19 @@ class NetDiskViewModel(
             }
             state.copy(
                 favoriteFilter = next,
-                files = state.rawFiles.toDisplayedFiles(next, state.durationSortOrder),
+                files = state.rawFiles.toDisplayedFiles(next, state.durationSortOrder, state.searchInput),
             )
         }
         saveFilters()
+    }
+
+    fun onSearchInputChanged(value: String) {
+        _uiState.update { state ->
+            state.copy(
+                searchInput = value,
+                files = state.rawFiles.toDisplayedFiles(state.favoriteFilter, state.durationSortOrder, value),
+            )
+        }
     }
 
     fun cycleSortOption() {
@@ -275,15 +293,17 @@ class NetDiskViewModel(
             } else {
                 val next = when (state.durationSortOrder) {
                     NetDiskDurationSortOrder.Asc -> NetDiskDurationSortOrder.Desc
-                    NetDiskDurationSortOrder.Desc -> NetDiskDurationSortOrder.Asc
+                    NetDiskDurationSortOrder.Desc -> null
                     null -> NetDiskDurationSortOrder.Asc
                 }
                 state.copy(
                     durationSortOrder = next,
-                    files = state.rawFiles.toDisplayedFiles(state.favoriteFilter, next),
+                    files = state.rawFiles.toDisplayedFiles(state.favoriteFilter, next, state.searchInput),
                 )
             }
         }
+        saveFilters()
+        saveContentCacheAsync()
     }
 
     fun toggleFileStar(fileId: String) {
@@ -325,7 +345,7 @@ class NetDiskViewModel(
     }
 
     private fun loadSavedFilters(): NetDiskUiState {
-        return NetDiskUiState(
+        val filteredState = NetDiskUiState(
             onlyVideos = prefs.getBoolean(KEY_ONLY_VIDEOS, false),
             favoriteFilter = FavoriteFilterMode.entries.firstOrNull {
                 it.name == prefs.getString(KEY_FAVORITE_FILTER, FavoriteFilterMode.All.name)
@@ -334,6 +354,9 @@ class NetDiskViewModel(
                 it.queryValue == prefs.getString(KEY_SORT_OPTION, NetDiskSortOption.FileSize.queryValue)
             } ?: NetDiskSortOption.FileSize,
             isAscending = prefs.getBoolean(KEY_IS_ASCENDING, false),
+            durationSortOrder = NetDiskDurationSortOrder.entries.firstOrNull {
+                it.name == prefs.getString(KEY_DURATION_SORT_ORDER, "")
+            },
             limit = prefs.getInt(KEY_PAGE_SIZE, DEFAULT_PAGE_SIZE).takeIf {
                 it in PAGE_SIZE_OPTIONS
             } ?: DEFAULT_PAGE_SIZE,
@@ -342,6 +365,7 @@ class NetDiskViewModel(
                 it.name == prefs.getString(KEY_VIEW_MODE, NetDiskViewMode.List.name)
             } ?: NetDiskViewMode.List,
         )
+        return loadContentCache(filteredState) ?: filteredState
     }
 
     private fun saveFilters() {
@@ -351,6 +375,7 @@ class NetDiskViewModel(
             .putString(KEY_FAVORITE_FILTER, current.favoriteFilter.name)
             .putString(KEY_SORT_OPTION, current.sortOption.queryValue)
             .putBoolean(KEY_IS_ASCENDING, current.isAscending)
+            .putString(KEY_DURATION_SORT_ORDER, current.durationSortOrder?.name.orEmpty())
             .putInt(KEY_PAGE_SIZE, current.limit)
             .putString(KEY_VIEW_MODE, current.viewMode.name)
             .apply()
@@ -478,18 +503,20 @@ class NetDiskViewModel(
                         isRefreshing = false,
                         isLoadingMore = false,
                         rawFiles = result.files,
-                        files = result.files.toDisplayedFiles(it.favoriteFilter, it.durationSortOrder),
+                        files = result.files.toDisplayedFiles(it.favoriteFilter, it.durationSortOrder, it.searchInput),
                         count = result.count,
                         offset = 0,
                         limit = pageLimit,
                         currentCid = result.cid,
                         path = result.path,
+                        restoredFromCache = false,
                     )
                 }
                 prefs.edit()
                     .putInt(KEY_PAGE_SIZE, pageLimit)
                     .putString(KEY_CURRENT_CID, result.cid)
                     .apply()
+                saveContentCacheAsync()
             }.onFailure { error ->
                 _uiState.update {
                     it.copy(
@@ -556,12 +583,13 @@ class NetDiskViewModel(
                         isLoadingMore = false,
                         errorMessage = null,
                         rawFiles = rawFiles,
-                        files = rawFiles.toDisplayedFiles(it.favoriteFilter, it.durationSortOrder),
+                        files = rawFiles.toDisplayedFiles(it.favoriteFilter, it.durationSortOrder, it.searchInput),
                         count = response.count,
                         offset = if (append) it.offset else response.offset,
                         limit = response.limit,
                         currentCid = response.cid.ifBlank { cid },
                         path = response.path,
+                        restoredFromCache = false,
                     )
                 }
                 if (!append) {
@@ -569,6 +597,7 @@ class NetDiskViewModel(
                         .putString(KEY_CURRENT_CID, response.cid.ifBlank { cid })
                         .apply()
                 }
+                saveContentCacheAsync()
             }.onFailure { error ->
                 _uiState.update {
                     it.copy(
@@ -582,12 +611,52 @@ class NetDiskViewModel(
         }
     }
 
+    private fun loadContentCache(baseState: NetDiskUiState): NetDiskUiState? {
+        return runCatching {
+            if (!cacheFile.exists()) return null
+            val json = JSONObject(cacheFile.readText())
+            val rawFiles = json.optJSONArray("files").toNetDiskFiles()
+            baseState.copy(
+                isLoading = false,
+                rawFiles = rawFiles,
+                files = rawFiles.toDisplayedFiles(baseState.favoriteFilter, baseState.durationSortOrder, baseState.searchInput),
+                count = json.optInt("count", rawFiles.size),
+                offset = json.optInt("offset", 0),
+                limit = json.optInt("limit", baseState.limit).takeIf { it > 0 } ?: baseState.limit,
+                currentCid = json.optString("currentCid", baseState.currentCid).ifBlank { "0" },
+                path = json.optJSONArray("path").toNetDiskPath(),
+                restoredFromCache = true,
+            )
+        }.getOrNull()
+    }
+
+    private fun saveContentCacheAsync() {
+        viewModelScope.launch(Dispatchers.IO) {
+            saveContentCache(_uiState.value)
+        }
+    }
+
+    private fun saveContentCache(state: NetDiskUiState) {
+        runCatching {
+            val json = JSONObject()
+                .put("count", state.count)
+                .put("offset", state.offset)
+                .put("limit", state.limit)
+                .put("currentCid", state.currentCid)
+                .put("path", state.path.toPathJsonArray())
+                .put("files", state.rawFiles.toFileJsonArray())
+            cacheFile.writeText(json.toString())
+        }
+    }
+
     private companion object {
         const val PREFS_NAME = "netdisk_prefs"
+        const val CACHE_FILE_NAME = "netdisk_content_cache.json"
         const val KEY_ONLY_VIDEOS = "only_videos"
         const val KEY_FAVORITE_FILTER = "favorite_filter"
         const val KEY_SORT_OPTION = "sort_option"
         const val KEY_IS_ASCENDING = "is_ascending"
+        const val KEY_DURATION_SORT_ORDER = "duration_sort_order"
         const val KEY_PAGE_SIZE = "page_size"
         const val KEY_CURRENT_CID = "current_cid"
         const val KEY_VIEW_MODE = "view_mode"
@@ -604,24 +673,132 @@ private data class LoadedNetDiskFiles(
     val path: List<NetDiskPathNode>,
 )
 
+private fun List<NetDiskFile>.toFileJsonArray(): JSONArray {
+    return JSONArray().also { array ->
+        forEach { file ->
+            array.put(
+                JSONObject()
+                    .put("id", file.id)
+                    .put("parentId", file.parentId)
+                    .put("isDirectory", file.isDirectory)
+                    .put("n", file.n)
+                    .putNullable("ns", file.ns)
+                    .putNullable("remark", file.remark)
+                    .put("size", file.size)
+                    .putNullable("updateTime", file.updateTime)
+                    .putNullable("uploadTime", file.uploadTime)
+                    .putNullable("durationSeconds", file.durationSeconds)
+                    .putNullable("fileType", file.fileType)
+                    .putNullable("suffix", file.suffix)
+                    .put("isStarred", file.isStarred)
+                    .put("isEncrypted", file.isEncrypted)
+                    .put("isVideo", file.isVideo)
+                    .putNullable("thumbnail", file.thumbnail)
+                    .putNullable("pc", file.pc)
+            )
+        }
+    }
+}
+
+private fun JSONArray?.toNetDiskFiles(): List<NetDiskFile> {
+    if (this == null) return emptyList()
+    return buildList {
+        for (index in 0 until length()) {
+            val row = optJSONObject(index) ?: continue
+            add(
+                NetDiskFile(
+                    id = row.optString("id"),
+                    parentId = row.optString("parentId"),
+                    isDirectory = row.optBoolean("isDirectory"),
+                    n = row.optString("n"),
+                    ns = row.optNullableString("ns"),
+                    remark = row.optNullableString("remark"),
+                    size = row.optLong("size"),
+                    updateTime = row.optNullableLong("updateTime"),
+                    uploadTime = row.optNullableLong("uploadTime"),
+                    durationSeconds = row.optNullableLong("durationSeconds"),
+                    fileType = row.optNullableString("fileType"),
+                    suffix = row.optNullableString("suffix"),
+                    isStarred = row.optBoolean("isStarred"),
+                    isEncrypted = row.optBoolean("isEncrypted"),
+                    isVideo = row.optBoolean("isVideo"),
+                    thumbnail = row.optNullableString("thumbnail"),
+                    pc = row.optNullableString("pc"),
+                )
+            )
+        }
+    }
+}
+
+private fun List<NetDiskPathNode>.toPathJsonArray(): JSONArray {
+    return JSONArray().also { array ->
+        forEach { node ->
+            array.put(
+                JSONObject()
+                    .put("cid", node.cid)
+                    .putNullable("pid", node.pid)
+                    .put("name", node.name)
+            )
+        }
+    }
+}
+
+private fun JSONArray?.toNetDiskPath(): List<NetDiskPathNode> {
+    if (this == null) return emptyList()
+    return buildList {
+        for (index in 0 until length()) {
+            val row = optJSONObject(index) ?: continue
+            add(
+                NetDiskPathNode(
+                    cid = row.optString("cid"),
+                    pid = row.optNullableString("pid"),
+                    name = row.optString("name"),
+                )
+            )
+        }
+    }
+}
+
+private fun JSONObject.putNullable(name: String, value: Any?): JSONObject {
+    return put(name, value ?: JSONObject.NULL)
+}
+
+private fun JSONObject.optNullableString(name: String): String? {
+    if (!has(name) || isNull(name)) return null
+    return optString(name).takeIf { it.isNotEmpty() && it != "null" }
+}
+
+private fun JSONObject.optNullableLong(name: String): Long? {
+    if (!has(name) || isNull(name)) return null
+    return optLong(name)
+}
+
 private fun List<NetDiskFile>.toDisplayedFiles(
     filter: FavoriteFilterMode,
     durationSortOrder: NetDiskDurationSortOrder?,
+    searchInput: String = "",
 ): List<NetDiskFile> {
     val filtered = when (filter) {
         FavoriteFilterMode.All -> this
         FavoriteFilterMode.Favorite -> filter { it.isStarred }
         FavoriteFilterMode.Unfavorite -> filterNot { it.isStarred }
     }
+    val searched = searchInput.trim().takeIf { it.isNotEmpty() }?.let { query ->
+        filtered.filter { file ->
+            file.n.contains(query, ignoreCase = true) ||
+                file.remark.orEmpty().contains(query, ignoreCase = true) ||
+                file.suffix.orEmpty().contains(query, ignoreCase = true)
+        }
+    } ?: filtered
     return when (durationSortOrder) {
-        NetDiskDurationSortOrder.Asc -> filtered.sortedWith(
+        NetDiskDurationSortOrder.Asc -> searched.sortedWith(
             compareBy<NetDiskFile> { it.durationSeconds == null }
                 .thenBy { it.durationSeconds ?: Long.MAX_VALUE }
         )
-        NetDiskDurationSortOrder.Desc -> filtered.sortedWith(
+        NetDiskDurationSortOrder.Desc -> searched.sortedWith(
             compareBy<NetDiskFile> { it.durationSeconds == null }
                 .thenByDescending { it.durationSeconds ?: Long.MIN_VALUE }
         )
-        null -> filtered
+        null -> searched
     }
 }

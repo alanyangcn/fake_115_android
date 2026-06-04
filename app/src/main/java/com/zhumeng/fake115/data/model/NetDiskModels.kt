@@ -29,6 +29,45 @@ data class NetDiskPathNode(
     val name: String,
 )
 
+data class NetDiskFileDetail(
+    val id: String,
+    val isDirectory: Boolean,
+    val fileName: String,
+    val pickCode: String,
+    val sha1: String,
+    val size: String,
+    val count: String,
+    val folderCount: String,
+    val playLongSeconds: Long,
+    val showPlayLongSeconds: Long,
+    val createTime: Long?,
+    val updateTime: Long?,
+    val uploadTime: Long?,
+    val openTime: Long?,
+    val isShare: Boolean,
+    val isPrivate: Boolean,
+    val isMarked: Boolean,
+    val score: String,
+    val desc: String,
+    val fileCategory: String,
+    val labels: List<NetDiskFileLabel>,
+    val paths: List<NetDiskDetailPathNode>,
+)
+
+data class NetDiskFileLabel(
+    val id: String,
+    val name: String,
+    val sort: String,
+    val color: String,
+    val updateTime: Long?,
+    val createTime: Long?,
+)
+
+data class NetDiskDetailPathNode(
+    val fileId: String,
+    val fileName: String,
+)
+
 data class NetDiskResponse(
     val files: List<NetDiskFile>,
     val count: Int,
