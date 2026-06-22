@@ -104,6 +104,31 @@ class NetDiskRepository(
         return@withContext "删除成功"
     }
 
+    suspend fun moveFile(
+        fileId: String,
+        targetCid: String,
+    ): String = withContext(Dispatchers.IO) {
+        val json = requestJson(
+            uri = Uri.parse("https://webapi.115.com/files/move"),
+            method = "POST",
+            formParams = linkedMapOf(
+                "pid" to targetCid,
+                "move_proid" to "${System.currentTimeMillis()}_-63_0",
+                "fid[0]" to fileId,
+            ),
+        )
+
+        if (!json.optBoolean("state", false)) {
+            throw IllegalStateException(
+                json.optString("error")
+                    .ifBlank { json.optString("message") }
+                    .ifBlank { "移动失败。" }
+            )
+        }
+
+        return@withContext json.optString("message").ifBlank { "移动成功" }
+    }
+
     private fun buildUri(base: String, params: Map<String, String>): Uri {
         val builder = Uri.parse(base).buildUpon()
         params.forEach { (key, value) -> builder.appendQueryParameter(key, value) }
@@ -287,6 +312,8 @@ class NetDiskRepository(
     }
 
     companion object {
+        const val CLASSIFIED_TARGET_CID = "3453630900415081379"
+
         private const val TAG = "NetDiskRepository"
         private const val LOG_PREVIEW_LENGTH = 4000
         private val starredFileEventsInternal = MutableSharedFlow<StarredFileEvent>(extraBufferCapacity = 16)

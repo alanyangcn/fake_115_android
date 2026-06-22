@@ -36,6 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.rounded.AccessTime
 import androidx.compose.material.icons.rounded.Delete
@@ -47,12 +48,12 @@ import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.InsertDriveFile
+import androidx.compose.material.icons.rounded.LocalFlorist
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.MusicNote
-import androidx.compose.material.icons.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.Schedule
-import androidx.compose.material.icons.rounded.SortByAlpha
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.SortByAlpha
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material.icons.rounded.Upload
@@ -182,6 +183,13 @@ fun NetDiskScreen(
     LaunchedEffect(state.isLoading, state.isRefreshing, state.isLoadingMore) {
         if (!state.isLoading && !state.isRefreshing && !state.isLoadingMore) {
             pageButtonLocked = false
+        }
+    }
+
+    LaunchedEffect(viewModel, context) {
+        viewModel.toastMessages.collect { message ->
+            activeToast?.cancel()
+            activeToast = Toast.makeText(context, message, Toast.LENGTH_SHORT).also { it.show() }
         }
     }
 
@@ -358,13 +366,13 @@ fun NetDiskScreen(
                         state = gridState,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(
-                            start = 12.dp,
-                            end = 12.dp,
+                            start = 8.dp,
+                            end = 8.dp,
                             top = 0.dp,
                             bottom = contentPadding.calculateBottomPadding() + 74.dp,
                         ),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalItemSpacing = 10.dp,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalItemSpacing = 6.dp,
                     ) {
                         when {
                             state.isLoading && state.files.isEmpty() -> {
@@ -383,6 +391,7 @@ fun NetDiskScreen(
                                         file = file,
                                         favoriteUpdating = file.id in state.starUpdatingIds,
                                         deleting = file.id in state.deletingIds,
+                                        classifying = file.id in state.movingIds,
                                         onOpen = { openFile(file) },
                                         onToggleFavorite = { viewModel.toggleFileStar(file.id) },
                                         onDelete = {
@@ -391,6 +400,9 @@ fun NetDiskScreen(
                                             } else {
                                                 pendingDeleteFile = file
                                             }
+                                        },
+                                        onClassify = {
+                                            viewModel.moveFileToClassifiedFolder(file.id)
                                         },
                                         onOpenDetail = { openDetail(file) },
                                     )
@@ -629,7 +641,7 @@ private fun NetDiskPagerFloatingControls(
                 enabled = pageButtonsEnabled && state.hasNextPage && !busy,
             )
             NetDiskFloatingIconButton(
-                icon = Icons.Rounded.PlaylistAdd,
+                icon = Icons.AutoMirrored.Rounded.PlaylistAdd,
                 contentDescription = "加载全部",
                 onClick = onLoadAll,
                 enabled = !busy,
@@ -979,9 +991,11 @@ private fun NetDiskWaterfallFileCard(
     file: NetDiskFile,
     favoriteUpdating: Boolean,
     deleting: Boolean,
+    classifying: Boolean,
     onOpen: () -> Unit,
     onToggleFavorite: () -> Unit,
     onDelete: () -> Unit,
+    onClassify: () -> Unit,
     onOpenDetail: () -> Unit,
 ) {
     val colors = AppTheme.colors
@@ -1034,7 +1048,7 @@ private fun NetDiskWaterfallFileCard(
             }
 
             Column(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
                 Text(
@@ -1043,16 +1057,33 @@ private fun NetDiskWaterfallFileCard(
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Medium,
                 )
-                Text(
-                    text = file.uploadTime?.let(::formatListTime) ?: "-",
-                    color = colors.textTertiary,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = file.uploadTime?.let(::formatListTime) ?: "-",
+                        modifier = Modifier.weight(1f),
+                        color = colors.textTertiary,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (!file.isDirectory) {
+                        Text(
+                            text = formatFileSize(file.size),
+                            color = colors.textTertiary,
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = TextAlign.End,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     NetDiskCardIconButton(
@@ -1063,6 +1094,15 @@ private fun NetDiskWaterfallFileCard(
                         enabled = !favoriteUpdating,
                         containerColor = if (file.isStarred) colors.dangerSoft else colors.surfaceVariant,
                         contentColor = if (file.isStarred) colors.danger else colors.textPrimary,
+                    )
+                    NetDiskCardIconButton(
+                        modifier = Modifier.weight(1f),
+                        icon = Icons.Rounded.LocalFlorist,
+                        contentDescription = "分类",
+                        onClick = onClassify,
+                        enabled = !classifying,
+                        containerColor = colors.accentSoft,
+                        contentColor = colors.accentText,
                     )
                     NetDiskCardIconButton(
                         modifier = Modifier.weight(1f),
@@ -1126,7 +1166,7 @@ private fun NetDiskCardIconButton(
         enabled = enabled,
         modifier = modifier.height(34.dp),
         shape = RoundedCornerShape(10.dp),
-        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
         colors = ButtonDefaults.filledTonalButtonColors(
             containerColor = resolvedContainerColor,
             contentColor = resolvedContentColor,

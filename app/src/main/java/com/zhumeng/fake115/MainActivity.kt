@@ -65,6 +65,7 @@ import com.zhumeng.fake115.data.model.LibraryMovie
 import com.zhumeng.fake115.ui.actress.ActressScreen
 import com.zhumeng.fake115.ui.actress.ActressViewModel
 import com.zhumeng.fake115.ui.home.LibraryScreen
+import com.zhumeng.fake115.ui.home.LibraryDetailFilterType
 import com.zhumeng.fake115.ui.home.LibraryViewModel
 import com.zhumeng.fake115.ui.netdisk.NetDiskScreen
 import com.zhumeng.fake115.ui.netdisk.NetDiskViewModel
@@ -84,6 +85,7 @@ private const val LABEL_SEARCH = "搜索"
 
 class MainActivity : ComponentActivity() {
     private val targetNetDiskCid = mutableStateOf<String?>(null)
+    private val targetLibraryFilter = mutableStateOf<LibraryFilterTarget?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -91,11 +93,14 @@ class MainActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         targetNetDiskCid.value = intent.getStringExtra(EXTRA_NET_DISK_CID)
+        targetLibraryFilter.value = intent.readLibraryFilterTarget()
         setContent {
             Fake115Theme {
                 MainScreen(
                     targetNetDiskCid = targetNetDiskCid.value,
+                    targetLibraryFilter = targetLibraryFilter.value,
                     onNetDiskTargetConsumed = { targetNetDiskCid.value = null },
+                    onLibraryFilterTargetConsumed = { targetLibraryFilter.value = null },
                     onOpenPlayer = { movie, playlist ->
                         startActivity(
                             PlayerActivity.createIntent(
@@ -129,10 +134,13 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         targetNetDiskCid.value = intent.getStringExtra(EXTRA_NET_DISK_CID)
+        targetLibraryFilter.value = intent.readLibraryFilterTarget()
     }
 
     companion object {
         private const val EXTRA_NET_DISK_CID = "extra_net_disk_cid"
+        private const val EXTRA_LIBRARY_FILTER_KEY = "extra_library_filter_key"
+        private const val EXTRA_LIBRARY_FILTER_VALUE = "extra_library_filter_value"
 
         fun createNetDiskIntent(
             context: Context,
@@ -143,8 +151,35 @@ class MainActivity : ComponentActivity() {
                 putExtra(EXTRA_NET_DISK_CID, cid.ifBlank { "0" })
             }
         }
+
+        fun createLibraryFilterIntent(
+            context: Context,
+            queryKey: String,
+            value: String,
+        ): Intent {
+            return Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra(EXTRA_LIBRARY_FILTER_KEY, queryKey)
+                putExtra(EXTRA_LIBRARY_FILTER_VALUE, value)
+            }
+        }
+
+        private fun Intent.readLibraryFilterTarget(): LibraryFilterTarget? {
+            val type = getStringExtra(EXTRA_LIBRARY_FILTER_KEY)
+                ?.let(LibraryDetailFilterType::fromQueryKey)
+                ?: return null
+            val value = getStringExtra(EXTRA_LIBRARY_FILTER_VALUE)
+                ?.takeIf { it.isNotBlank() }
+                ?: return null
+            return LibraryFilterTarget(type, value)
+        }
     }
 }
+
+private data class LibraryFilterTarget(
+    val type: LibraryDetailFilterType,
+    val value: String,
+)
 
 private enum class MainTab {
     Home,
@@ -159,7 +194,9 @@ private const val KEY_SELECTED_TAB = "selected_tab"
 @Composable
 private fun MainScreen(
     targetNetDiskCid: String?,
+    targetLibraryFilter: LibraryFilterTarget?,
     onNetDiskTargetConsumed: () -> Unit,
+    onLibraryFilterTargetConsumed: () -> Unit,
     onOpenPlayer: (LibraryMovie, List<LibraryMovie>) -> Unit,
     onOpenDetail: (LibraryMovie) -> Unit,
 ) {
@@ -193,6 +230,14 @@ private fun MainScreen(
         mainPrefs.edit().putString(KEY_SELECTED_TAB, MainTab.NetDisk.name).apply()
         netDiskViewModel.openPath(cid)
         onNetDiskTargetConsumed()
+    }
+
+    LaunchedEffect(targetLibraryFilter) {
+        val target = targetLibraryFilter ?: return@LaunchedEffect
+        selectedTab = MainTab.Home
+        mainPrefs.edit().putString(KEY_SELECTED_TAB, MainTab.Home.name).apply()
+        libraryViewModel.filterByDetailTag(target.type, target.value)
+        onLibraryFilterTargetConsumed()
     }
 
     Scaffold(

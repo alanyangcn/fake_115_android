@@ -52,6 +52,7 @@ import androidx.compose.material.icons.rounded.FitScreen
 import androidx.compose.material.icons.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.List
+import androidx.compose.material.icons.rounded.LocalFlorist
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.OpenInFull
@@ -147,6 +148,7 @@ fun VideoPlayerScreen(
     resolveUrl: (suspend (String) -> String)? = null,
     updateFavorite: (suspend (String, Boolean) -> Boolean)? = null,
     deleteVideo: (suspend (String) -> String)? = null,
+    classifyVideo: (suspend (String) -> String)? = null,
     autoPlayNextAfterFavorite: Boolean = false,
     playlist: List<PlayerPlaylistItem> = emptyList(),
     currentPlaylistIndex: Int = -1,
@@ -162,6 +164,7 @@ fun VideoPlayerScreen(
     var isFavorite by rememberSaveable(itemId) { mutableStateOf(initialFavorite) }
     var isFavoriteUpdating by remember { mutableStateOf(false) }
     var isDeleting by remember { mutableStateOf(false) }
+    var isClassifying by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val exoPlayer = rememberManagedExoPlayer(
         url = resolvedUrl,
@@ -171,6 +174,7 @@ fun VideoPlayerScreen(
 
     LaunchedEffect(itemId) {
         isDeleting = false
+        isClassifying = false
         isFavoriteUpdating = false
         errorMessage = null
     }
@@ -273,6 +277,23 @@ fun VideoPlayerScreen(
         }
     }
 
+    val handleClassify: () -> Unit = {
+        if (classifyVideo != null && itemId.isNotBlank() && !isClassifying) {
+            scope.launch {
+                isClassifying = true
+                runCatching { classifyVideo(itemId) }
+                    .onSuccess {
+                        isClassifying = false
+                        onDeleteCompleted()
+                    }
+                    .onFailure { error ->
+                        errorMessage = error.message ?: "Failed to classify video."
+                        isClassifying = false
+                    }
+            }
+        }
+    }
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = Color.Black
@@ -288,9 +309,11 @@ fun VideoPlayerScreen(
                         isFavorite = isFavorite,
                         favoriteEnabled = !isFavoriteUpdating && updateFavorite != null && itemId.isNotBlank(),
                         deleteEnabled = !isDeleting && deleteVideo != null && itemId.isNotBlank(),
+                        classifyEnabled = !isClassifying && classifyVideo != null && itemId.isNotBlank(),
                         deleteInProgress = isDeleting,
                         onToggleFavorite = handleToggleFavorite,
                         onDelete = handleDelete,
+                        onClassify = handleClassify,
                         playlist = playlist,
                         currentPlaylistIndex = currentPlaylistIndex,
                         onPlaylistItemSelected = onPlaylistItemSelected,
@@ -312,9 +335,11 @@ fun VideoPlayerScreen(
                         isFavorite = isFavorite,
                         favoriteEnabled = !isFavoriteUpdating && updateFavorite != null && itemId.isNotBlank(),
                         deleteEnabled = !isDeleting && deleteVideo != null && itemId.isNotBlank(),
+                        classifyEnabled = !isClassifying && classifyVideo != null && itemId.isNotBlank(),
                         deleteInProgress = isDeleting,
                         onToggleFavorite = handleToggleFavorite,
                         onDelete = handleDelete,
+                        onClassify = handleClassify,
                         playlist = playlist,
                         currentPlaylistIndex = currentPlaylistIndex,
                         onPlaylistItemSelected = onPlaylistItemSelected,
@@ -351,9 +376,11 @@ private fun PlayerUnavailableShell(
     isFavorite: Boolean,
     favoriteEnabled: Boolean,
     deleteEnabled: Boolean,
+    classifyEnabled: Boolean,
     deleteInProgress: Boolean,
     onToggleFavorite: () -> Unit,
     onDelete: () -> Unit,
+    onClassify: () -> Unit,
     playlist: List<PlayerPlaylistItem>,
     currentPlaylistIndex: Int,
     onPlaylistItemSelected: (Int) -> Unit,
@@ -394,11 +421,13 @@ private fun PlayerUnavailableShell(
             isFavorite = isFavorite,
             favoriteEnabled = favoriteEnabled,
             deleteEnabled = deleteEnabled,
+            classifyEnabled = classifyEnabled,
             showPlaylistButton = playlist.isNotEmpty(),
             onBack = onBack,
             onOpenPlaylist = { showPlaylistDialog = true },
             onCycleResizeMode = { resizeMode = resizeMode.next() },
             onToggleFavorite = onToggleFavorite,
+            onClassify = onClassify,
             onDelete = {
                 if (quickManagementEnabled) {
                     onDelete()
@@ -504,9 +533,11 @@ fun EmbeddedVideoPlayer(
     isFavorite: Boolean = false,
     favoriteEnabled: Boolean = false,
     deleteEnabled: Boolean = false,
+    classifyEnabled: Boolean = false,
     deleteInProgress: Boolean = false,
     onToggleFavorite: () -> Unit = {},
     onDelete: () -> Unit = {},
+    onClassify: () -> Unit = {},
     playlist: List<PlayerPlaylistItem> = emptyList(),
     currentPlaylistIndex: Int = -1,
     onPlaylistItemSelected: (Int) -> Unit = {},
@@ -531,9 +562,11 @@ fun EmbeddedVideoPlayer(
                     isFavorite = isFavorite,
                     favoriteEnabled = favoriteEnabled,
                     deleteEnabled = deleteEnabled,
+                    classifyEnabled = classifyEnabled,
                     deleteInProgress = deleteInProgress,
                     onToggleFavorite = onToggleFavorite,
                     onDelete = onDelete,
+                    onClassify = onClassify,
                     playlist = playlist,
                     currentPlaylistIndex = currentPlaylistIndex,
                     onPlaylistItemSelected = onPlaylistItemSelected,
@@ -562,9 +595,11 @@ fun EmbeddedVideoPlayer(
                             isFavorite = isFavorite,
                             favoriteEnabled = favoriteEnabled,
                             deleteEnabled = deleteEnabled,
+                            classifyEnabled = classifyEnabled,
                             deleteInProgress = deleteInProgress,
                             onToggleFavorite = onToggleFavorite,
                             onDelete = onDelete,
+                            onClassify = onClassify,
                             playlist = playlist,
                             currentPlaylistIndex = currentPlaylistIndex,
                             onPlaylistItemSelected = onPlaylistItemSelected,
@@ -598,9 +633,11 @@ fun EmbeddedVideoPlayer(
                     isFavorite = isFavorite,
                     favoriteEnabled = favoriteEnabled,
                     deleteEnabled = deleteEnabled,
+                    classifyEnabled = classifyEnabled,
                     deleteInProgress = deleteInProgress,
                     onToggleFavorite = onToggleFavorite,
                     onDelete = onDelete,
+                    onClassify = onClassify,
                     playlist = playlist,
                     currentPlaylistIndex = currentPlaylistIndex,
                     onPlaylistItemSelected = onPlaylistItemSelected,
@@ -688,9 +725,11 @@ private fun PlayerContainer(
     isFavorite: Boolean,
     favoriteEnabled: Boolean,
     deleteEnabled: Boolean,
+    classifyEnabled: Boolean,
     deleteInProgress: Boolean,
     onToggleFavorite: () -> Unit,
     onDelete: () -> Unit,
+    onClassify: () -> Unit,
     playlist: List<PlayerPlaylistItem>,
     currentPlaylistIndex: Int,
     onPlaylistItemSelected: (Int) -> Unit,
@@ -1088,6 +1127,7 @@ private fun PlayerContainer(
                 isFavorite = isFavorite,
                 favoriteEnabled = favoriteEnabled,
                 deleteEnabled = deleteEnabled,
+                classifyEnabled = classifyEnabled,
                 showPlaylistButton = playlist.isNotEmpty(),
                 onBack = onBack,
                 onOpenPlaylist = {
@@ -1101,6 +1141,10 @@ private fun PlayerContainer(
                 onToggleFavorite = {
                     markControlsInteraction()
                     onToggleFavorite()
+                },
+                onClassify = {
+                    markControlsInteraction()
+                    onClassify()
                 },
                 onDelete = {
                     markControlsInteraction()
@@ -1306,11 +1350,13 @@ private fun PlayerTopOverlay(
     isFavorite: Boolean,
     favoriteEnabled: Boolean,
     deleteEnabled: Boolean,
+    classifyEnabled: Boolean,
     showPlaylistButton: Boolean,
     onBack: () -> Unit,
     onOpenPlaylist: () -> Unit,
     onCycleResizeMode: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onClassify: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1377,6 +1423,17 @@ private fun PlayerTopOverlay(
                 Icon(
                     imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                     contentDescription = if (isFavorite) "Unfavorite" else "Favorite",
+                    tint = Color.White,
+                )
+            }
+            PlayerOverlayIconButton(
+                onClick = onClassify,
+                modifier = Modifier.size(36.dp),
+                enabled = classifyEnabled,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.LocalFlorist,
+                    contentDescription = "Classify",
                     tint = Color.White,
                 )
             }

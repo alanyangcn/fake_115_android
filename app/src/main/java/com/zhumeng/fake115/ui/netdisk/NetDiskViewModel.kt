@@ -9,8 +9,11 @@ import com.zhumeng.fake115.data.model.FavoriteFilterMode
 import com.zhumeng.fake115.data.model.NetDiskFile
 import com.zhumeng.fake115.data.model.NetDiskPathNode
 import com.zhumeng.fake115.data.model.NetDiskQuery
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
@@ -22,7 +25,6 @@ import java.io.File
 import kotlin.math.ceil
 
 private const val LOAD_ERROR = "加载网盘文件失败。"
-
 enum class NetDiskSortOption(
     val queryValue: String,
 ) {
@@ -71,6 +73,7 @@ data class NetDiskUiState(
     val viewMode: NetDiskViewMode = NetDiskViewMode.List,
     val starUpdatingIds: Set<String> = emptySet(),
     val deletingIds: Set<String> = emptySet(),
+    val movingIds: Set<String> = emptySet(),
     val restoredFromCache: Boolean = false,
 ) {
     val hasMore: Boolean
@@ -97,6 +100,8 @@ class NetDiskViewModel(
     private val cacheFile = File(application.filesDir, CACHE_FILE_NAME)
     private val _uiState = MutableStateFlow(loadSavedFilters())
     val uiState: StateFlow<NetDiskUiState> = _uiState.asStateFlow()
+    private val _toastMessages = MutableSharedFlow<String>()
+    val toastMessages: SharedFlow<String> = _toastMessages.asSharedFlow()
 
     init {
         observeRepositoryEvents()
@@ -340,6 +345,33 @@ class NetDiskViewModel(
             }
             _uiState.update {
                 it.copy(deletingIds = it.deletingIds - fileId)
+            }
+        }
+    }
+
+    fun moveFileToClassifiedFolder(fileId: String) {
+        val current = _uiState.value
+        if (fileId in current.movingIds) return
+        val file = current.rawFiles.firstOrNull { it.id == fileId } ?: return
+        if (file.isDirectory) return
+
+        _uiState.update {
+            it.copy(movingIds = it.movingIds + fileId)
+        }
+        viewModelScope.launch {
+            runCatching {
+                repository.moveFile(
+                    fileId = fileId,
+                    targetCid = NetDiskRepository.CLASSIFIED_TARGET_CID,
+                )
+            }.onSuccess { message ->
+                removeFileLocally(fileId)
+                _toastMessages.emit(message.ifBlank { "已移动到分类目录" })
+            }.onFailure { error ->
+                _toastMessages.emit(error.message ?: "移动失败。")
+            }
+            _uiState.update {
+                it.copy(movingIds = it.movingIds - fileId)
             }
         }
     }

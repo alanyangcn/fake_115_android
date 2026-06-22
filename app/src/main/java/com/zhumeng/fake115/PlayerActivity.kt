@@ -127,6 +127,18 @@ class PlayerActivity : ComponentActivity() {
                         } else {
                             { id -> libraryRepository.deleteMovie(id.toInt()) }
                         },
+                        classifyVideo = if (useNetDiskActions) {
+                            { id ->
+                                val message = netDiskRepository.moveFile(
+                                    fileId = id,
+                                    targetCid = NetDiskRepository.CLASSIFIED_TARGET_CID,
+                                )
+                                NetDiskRepository.notifyFileDeleted(id)
+                                message
+                            }
+                        } else {
+                            null
+                        },
                         onDeleteCompleted = {
                             if (playlist.size <= 1) {
                                 finish()

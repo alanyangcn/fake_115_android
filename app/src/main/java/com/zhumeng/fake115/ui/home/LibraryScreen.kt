@@ -110,8 +110,8 @@ fun LibraryScreen(
     val monthOptions = remember { (1..12).map { it.toString().padStart(2, '0') } }
     var filterDialogVisible by remember { mutableStateOf(false) }
     var pendingDeleteMovie by remember { mutableStateOf<LibraryMovie?>(null) }
-    val hasActressFilter = state.selectedActress != null
-    val listTopPadding = contentPadding.calculateTopPadding() + if (hasActressFilter) 104.dp else 58.dp
+    val activeDetailFilterLabel = state.activeDetailFilterLabel
+    val listTopPadding = contentPadding.calculateTopPadding() + if (activeDetailFilterLabel != null) 104.dp else 58.dp
 
     LaunchedEffect(viewModel, context) {
         viewModel.toastMessages.collect { message ->
@@ -235,10 +235,10 @@ fun LibraryScreen(
                 .padding(top = listTopPadding),
         )
 
-        state.selectedActress?.let { actress ->
-            ActressFilterChip(
-                actress = actress,
-                onClear = viewModel::clearActressFilter,
+        activeDetailFilterLabel?.let { label ->
+            DetailFilterChip(
+                label = label,
+                onClear = viewModel::clearDetailFilter,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
@@ -312,8 +312,8 @@ private fun MovieTotalBadge(
 }
 
 @Composable
-private fun ActressFilterChip(
-    actress: String,
+private fun DetailFilterChip(
+    label: String,
     onClear: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -329,7 +329,7 @@ private fun ActressFilterChip(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Text(
-                text = actress,
+                text = label,
                 modifier = Modifier.weight(1f),
                 color = colors.textPrimary,
                 style = MaterialTheme.typography.labelLarge,
@@ -346,7 +346,7 @@ private fun ActressFilterChip(
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = Icons.Rounded.Close,
-                        contentDescription = "清空演员筛选",
+                        contentDescription = "清空详情筛选",
                         modifier = Modifier.size(14.dp),
                         tint = colors.textPrimary,
                     )
@@ -457,7 +457,11 @@ private fun LibraryToolbar(
                 state.selectedGenres.isNotEmpty() ||
                 state.selectedYear != null ||
                 state.selectedMonth != null ||
-                state.selectedActress != null
+                state.selectedActress != null ||
+                state.selectedStudio != null ||
+                state.selectedPublisher != null ||
+                state.selectedSeries != null ||
+                state.selectedFanhaoSeries != null
             ) {
                 colors.accentSoft
             } else {
@@ -539,7 +543,11 @@ private fun FilterDialog(
     val selectedFilterCount = state.selectedGenres.size +
         (if (state.selectedYear != null) 1 else 0) +
         (if (state.selectedMonth != null) 1 else 0) +
-        (if (state.selectedActress != null) 1 else 0)
+        (if (state.selectedActress != null) 1 else 0) +
+        (if (state.selectedStudio != null) 1 else 0) +
+        (if (state.selectedPublisher != null) 1 else 0) +
+        (if (state.selectedSeries != null) 1 else 0) +
+        (if (state.selectedFanhaoSeries != null) 1 else 0)
 
     Dialog(
         onDismissRequest = onDismiss,

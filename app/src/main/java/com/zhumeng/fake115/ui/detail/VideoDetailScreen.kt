@@ -77,6 +77,7 @@ fun VideoDetailScreen(
     videoId: Int,
     repository: LibraryRepository,
     onBack: () -> Unit,
+    onFilterTag: (String, String) -> Unit,
 ) {
     val colors = AppTheme.colors
     val context = LocalContext.current
@@ -165,6 +166,13 @@ fun VideoDetailScreen(
             DetailTopBar(
                 title = detail?.fanhao ?: "影片详情",
                 onBack = onBack,
+                onTitleClick = detail
+                    ?.fanhao
+                    ?.toFanhaoSeriesQuery()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { fanhaoSeries ->
+                        { onFilterTag("fanhaoSeries", fanhaoSeries) }
+                    },
             )
 
             when {
@@ -392,26 +400,36 @@ fun VideoDetailScreen(
                                     title = "制作商",
                                     tags = listOfNotNull(video.studio).ifEmpty { listOf("-") },
                                     containerColor = colors.accentSoft,
+                                    queryKey = "studio",
+                                    onFilterTag = onFilterTag,
                                 )
                                 DetailTagSection(
                                     title = "发行商",
                                     tags = listOfNotNull(video.publisher).ifEmpty { listOf("-") },
                                     containerColor = colors.surfaceVariant,
+                                    queryKey = "publisher",
+                                    onFilterTag = onFilterTag,
                                 )
                                 DetailTagSection(
                                     title = "系列",
                                     tags = listOfNotNull(video.series).ifEmpty { listOf("-") },
                                     containerColor = colors.surfaceVariant,
+                                    queryKey = "series",
+                                    onFilterTag = onFilterTag,
                                 )
                                 DetailTagSection(
                                     title = "影片类别",
                                     tags = video.genres.ifEmpty { listOf("-") },
                                     containerColor = colors.surfaceVariant,
+                                    queryKey = "genres",
+                                    onFilterTag = onFilterTag,
                                 )
                                 DetailTagSection(
                                     title = "演出人员",
                                     tags = video.actresses.ifEmpty { listOf("-") },
                                     containerColor = colors.dangerSoft,
+                                    queryKey = "actress",
+                                    onFilterTag = onFilterTag,
                                 )
                             }
                         }
@@ -456,12 +474,14 @@ fun VideoDetailScreen(
 private fun DetailTopBar(
     title: String,
     onBack: () -> Unit,
+    onTitleClick: (() -> Unit)?,
 ) {
     val colors = AppTheme.colors
     CenterAlignedTopAppBar(
         title = {
             Text(
                 text = title,
+                modifier = if (onTitleClick != null) Modifier.clickable(onClick = onTitleClick) else Modifier,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.titleMedium,
@@ -589,6 +609,8 @@ private fun DetailTagSection(
     title: String,
     tags: List<String>,
     containerColor: Color,
+    queryKey: String,
+    onFilterTag: (String, String) -> Unit,
 ) {
     val colors = AppTheme.colors
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -605,6 +627,9 @@ private fun DetailTagSection(
                 DetailTag(
                     text = tag,
                     containerColor = containerColor,
+                    onClick = if (tag == "-") null else {
+                        { onFilterTag(queryKey, tag) }
+                    },
                 )
             }
         }
@@ -615,12 +640,15 @@ private fun DetailTagSection(
 private fun DetailTag(
     text: String,
     containerColor: Color,
+    onClick: (() -> Unit)?,
 ) {
     val colors = AppTheme.colors
     Surface(
         shape = RoundedCornerShape(999.dp),
         color = containerColor,
         tonalElevation = 0.dp,
+        onClick = onClick ?: {},
+        enabled = onClick != null,
     ) {
         Text(
             text = text,
@@ -674,4 +702,15 @@ private fun formatDuration(seconds: Int): String {
         if (minutes > 0) append("${minutes}分钟")
         if (hours == 0 && remainSeconds > 0) append("${remainSeconds}秒")
     }
+}
+
+private fun String.toFanhaoSeriesQuery(): String {
+    val normalized = trim()
+        .replace('－', '-')
+        .replace('—', '-')
+        .replace('_', '-')
+    val prefix = normalized.substringBefore('-').trim()
+    return prefix.ifBlank {
+        normalized.takeWhile { it.isLetter() }
+    }.lowercase()
 }

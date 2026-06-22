@@ -26,6 +26,16 @@ class DetailActivity : ComponentActivity() {
                     videoId = videoId,
                     repository = repository,
                     onBack = ::finish,
+                    onFilterTag = { queryKey, value ->
+                        startActivity(
+                            MainActivity.createLibraryFilterIntent(
+                                context = this,
+                                queryKey = queryKey,
+                                value = value,
+                            )
+                        )
+                        finish()
+                    },
                 )
             }
         }

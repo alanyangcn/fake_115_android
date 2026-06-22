@@ -44,9 +44,25 @@ data class LibraryUiState(
     val selectedMonth: String? = null,
     val selectedGenres: Set<String> = emptySet(),
     val selectedActress: String? = null,
+    val selectedStudio: String? = null,
+    val selectedPublisher: String? = null,
+    val selectedSeries: String? = null,
+    val selectedFanhaoSeries: String? = null,
 ) {
     val hasMore: Boolean
         get() = movies.size < total
+
+    val activeDetailFilterLabel: String?
+        get() = when {
+            selectedStudio != null -> "制作商：$selectedStudio"
+            selectedPublisher != null -> "发行商：$selectedPublisher"
+            selectedSeries != null -> "系列：$selectedSeries"
+            selectedFanhaoSeries != null -> "番号系列：$selectedFanhaoSeries"
+            selectedActress != null -> "演出人员：$selectedActress"
+            selectedGenres.size == 1 -> "类别：${selectedGenres.first()}"
+            selectedGenres.size > 1 -> "类别：${selectedGenres.size} 项"
+            else -> null
+        }
 }
 
 private data class SavedLibraryState(
@@ -154,25 +170,43 @@ class LibraryViewModel(
     }
 
     fun filterByActress(name: String) {
-        val actress = name.trim()
-        if (actress.isBlank()) return
+        filterByDetailTag(LibraryDetailFilterType.Actress, name)
+    }
+
+    fun filterByDetailTag(type: LibraryDetailFilterType, value: String) {
+        val tag = value.trim()
+        if (tag.isBlank()) return
 
         searchJob?.cancel()
         _uiState.update {
             it.copy(
-                searchInput = "",
+                searchInput = if (type == LibraryDetailFilterType.FanhaoSeries) tag else "",
                 selectedYear = null,
                 selectedMonth = null,
-                selectedGenres = emptySet(),
-                selectedActress = actress,
+                selectedGenres = if (type == LibraryDetailFilterType.Genre) setOf(tag) else emptySet(),
+                selectedActress = if (type == LibraryDetailFilterType.Actress) tag else null,
+                selectedStudio = if (type == LibraryDetailFilterType.Studio) tag else null,
+                selectedPublisher = if (type == LibraryDetailFilterType.Publisher) tag else null,
+                selectedSeries = if (type == LibraryDetailFilterType.Series) tag else null,
+                selectedFanhaoSeries = if (type == LibraryDetailFilterType.FanhaoSeries) tag else null,
             )
         }
         persistCurrentControls()
         loadLibrary(page = 1, isRefreshing = false, append = false)
     }
 
-    fun clearActressFilter() {
-        _uiState.update { it.copy(selectedActress = null) }
+    fun clearDetailFilter() {
+        _uiState.update {
+            it.copy(
+                selectedActress = null,
+                selectedGenres = emptySet(),
+                selectedStudio = null,
+                selectedPublisher = null,
+                selectedSeries = null,
+                selectedFanhaoSeries = null,
+                searchInput = if (it.selectedFanhaoSeries != null) "" else it.searchInput,
+            )
+        }
         persistCurrentControls()
         loadLibrary(page = 1, isRefreshing = false, append = false)
     }
@@ -184,6 +218,10 @@ class LibraryViewModel(
                 selectedMonth = null,
                 selectedGenres = emptySet(),
                 selectedActress = null,
+                selectedStudio = null,
+                selectedPublisher = null,
+                selectedSeries = null,
+                selectedFanhaoSeries = null,
                 favoriteFilter = FavoriteFilterMode.All,
             )
         }
@@ -323,6 +361,10 @@ class LibraryViewModel(
                         month = current.selectedMonth,
                         genres = current.selectedGenres.takeIf { it.isNotEmpty() }?.joinToString(","),
                         actress = current.selectedActress,
+                        studio = current.selectedStudio,
+                        publisher = current.selectedPublisher,
+                        series = current.selectedSeries,
+                        fanhaoSeries = current.selectedFanhaoSeries,
                     )
                 )
             }.onSuccess { response ->
@@ -402,6 +444,21 @@ class LibraryViewModel(
         private const val KEY_SELECTED_ACTRESS = "selected_actress"
         private const val DEFAULT_PAGE_SIZE = 30
         private val PAGE_SIZE_OPTIONS = listOf(30, 60, 120)
+    }
+}
+
+enum class LibraryDetailFilterType(val queryKey: String) {
+    Studio("studio"),
+    Publisher("publisher"),
+    Series("series"),
+    Genre("genres"),
+    Actress("actress"),
+    FanhaoSeries("fanhaoSeries");
+
+    companion object {
+        fun fromQueryKey(value: String): LibraryDetailFilterType? {
+            return entries.firstOrNull { it.queryKey == value }
+        }
     }
 }
 

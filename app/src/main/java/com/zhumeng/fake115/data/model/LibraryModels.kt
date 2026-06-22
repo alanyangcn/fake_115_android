@@ -76,6 +76,10 @@ data class LibraryQuery(
     val month: String? = null,
     val genres: String? = null,
     val actress: String? = null,
+    val studio: String? = null,
+    val publisher: String? = null,
+    val series: String? = null,
+    val fanhaoSeries: String? = null,
 ) {
     fun toMap(): Map<String, String> {
         return buildMap {
@@ -89,6 +93,10 @@ data class LibraryQuery(
             month?.takeIf { it.isNotBlank() }?.let { put("month", it) }
             genres?.takeIf { it.isNotBlank() }?.let { put("genres", it) }
             actress?.takeIf { it.isNotBlank() }?.let { put("actress", it) }
+            studio?.takeIf { it.isNotBlank() }?.let { put("studio", it) }
+            publisher?.takeIf { it.isNotBlank() }?.let { put("publisher", it) }
+            series?.takeIf { it.isNotBlank() }?.let { put("series", it) }
+            fanhaoSeries?.takeIf { it.isNotBlank() }?.let { put("fanhaoSeries", it) }
         }
     }
 }
